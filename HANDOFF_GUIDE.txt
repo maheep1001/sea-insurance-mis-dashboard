@@ -1,0 +1,172 @@
+═══════════════════════════════════════════════════════════════════════════════
+  SEA Insurance MIS Dashboard — Claude Code Handoff Guide
+═══════════════════════════════════════════════════════════════════════════════
+
+WHAT'S BEING HANDED OFF:
+─────────────────────────────────────────────────────────────────────────────
+
+1. PROJECT_SUMMARY.md (THIS IS YOUR PRIMARY REFERENCE)
+   - Complete 13-section project overview
+   - Architecture, phases, code components, data mappings
+   - Known issues, deployment, testing checklist
+   - Glossary of terms
+   
+2. SEA_MIS_API.gs (Apps Script Backend, 530 lines)
+   - doGet() router
+   - getActuals() — NAV summary sheets
+   - getActualsFromFile() — Insurance Actuals (prev quarter + closed months)
+   - getAOP() — AOP targets
+   - Cache layer + health check
+   
+3. index.html (Dashboard Frontend, 991 lines)
+   - Complete HTML UI + Vanilla JavaScript
+   - buildQTDDescriptor() — QTD assembly logic
+   - loadCountry() — data orchestration
+   - doFreeze/applyNextPeriod/doUnfreeze — state machine
+   - renderPH/renderINDO — table generators
+
+4. This file (HANDOFF_GUIDE.txt)
+
+─────────────────────────────────────────────────────────────────────────────
+
+KEY FILE IDS (Paste into your environment if needed):
+─────────────────────────────────────────────────────────────────────────────
+
+PH NAV:         1_r-TfN7c4yrXcANEZP9eVKYf7oOJhLU2Z7wRBw7bPb4
+INDO NAV:       1925KcTeBptHNkDvRLTkKiL5MsikwpMrwK8GQLLPHRDA
+AOP:            10KsfE-shzOlFG_u1WLAPCgcYZx6FeJNnoiWFQ4YfoTw
+Actuals:        1saDApEjljXF_1fYui_UXnL2LYYaQ2Mz6YmAdtoW8UsA
+
+─────────────────────────────────────────────────────────────────────────────
+
+CURRENT STATUS:
+─────────────────────────────────────────────────────────────────────────────
+
+✅ Phases Complete (7 of 7):
+   - Phase 1: NAV summary sheets with SUMIFS
+   - Phase 2: AOP mapping & row index debugging
+   - Phase 3: Apps Script API with cache
+   - Phase 4: HtmlService integration (CORS resolved)
+   - Phase 5: Date range support + QTD assembly
+   - Phase 6: Insurance Actuals integration (prev quarter + closed months)
+   - Phase 7: Freeze/Unfreeze/Next Period state machine (NO auto-advance)
+
+🔄 Latest Change (Current Session):
+   Freeze behavior refactored:
+   - BEFORE: Freeze auto-advanced date picker to next month (confusing)
+   - AFTER: Freeze keeps date picker fixed, stores next-start hint, user 
+     clicks "Next Period" button when ready (opt-in, not forced)
+   
+   Impact: doFreeze() no longer touches date inputs
+           New applyNextPeriod() retrieves hint from localStorage
+           All storage via localStorage (mis_state_*, mis_snap_*, mis_next_start_*)
+
+⏳ Pending (Phase 8):
+   - Encode button wiring (write frozen data to Insurance Actuals)
+   - Time-based cache warm trigger confirmation
+   - (These are stubs in the code, not critical path)
+
+─────────────────────────────────────────────────────────────────────────────
+
+QUICK START FOR CLAUDE CODE:
+─────────────────────────────────────────────────────────────────────────────
+
+1. READ: PROJECT_SUMMARY.md, sections 1–3 (15 min overview)
+   
+2. UNDERSTAND: Architecture (section 2), Request Flow diagram
+   
+3. LOCATE: File structure (section 3) — which file handles what
+   
+4. REVIEW: Code components (section 6) for detailed function breakdown
+   
+5. DEBUG: Use Known Issues (section 7) as reference for patterns
+   
+6. TEST: Follow Testing Checklist (section 13) to validate changes
+
+─────────────────────────────────────────────────────────────────────────────
+
+COMMON BUG SCENARIOS TO WATCH FOR:
+─────────────────────────────────────────────────────────────────────────────
+
+1. B1/B2 Race Condition
+   - Multiple concurrent getActuals() calls write to NAV summary B1/B2
+   - Fix: Ensure loadCountry() calls are sequential (await each before next)
+   - Status: Already implemented; verify no regression
+
+2. QTD Edge Cases
+   - Single-month selection (monthIdx=0) should sum all to QTD
+   - Closing month boundary (29/30/31) varies by month
+   - Status: Logic is in buildQTDDescriptor() — test thoroughly
+
+3. Cache Invalidation
+   - Switching date range should invalidate old cache key
+   - Freezing range should not affect new range's cache
+   - Status: cacheBustAll() exists; verify it covers all keys
+
+4. FY26 Q4 Lookup
+   - Q1 previous quarter comes from FY26 Q4 (Jan-Mar 26)
+   - This data is NOT in live NAV — only in Insurance Actuals
+   - Status: getActualsFromFile() handles this; test with Q1 load
+
+5. Frozen State Per Tab
+   - PH and INDO should track freeze state independently
+   - localStorage keys include country name
+   - Status: Implementation complete; test tab-switching
+
+─────────────────────────────────────────────────────────────────────────────
+
+DEPLOYMENT CHECKLIST:
+─────────────────────────────────────────────────────────────────────────────
+
+□ Copy SEA_MIS_API.gs content into Apps Script Code.gs
+□ Create new HTML file named "index" in Apps Script
+□ Paste index.html content into it
+□ Deploy as Web App (Execute as Me, Anyone can access)
+□ Verify health check: {deployment-url}?action=ping
+□ Confirm all 4 file accesses pass (PH, INDO, AOP, ACTUALS = "ok")
+□ Open dashboard: {deployment-url} (no params)
+□ Load date range, verify PH and INDO tabs work
+□ Test Freeze → next-start hint stored
+□ Click Next Period → dates advance correctly
+□ Test Unfreeze → dates stay same, data reloads fresh
+□ Export Excel from both countries
+□ (Optional) Set up warmCache trigger every 5 minutes
+
+─────────────────────────────────────────────────────────────────────────────
+
+WHERE TO FIND ANSWERS:
+─────────────────────────────────────────────────────────────────────────────
+
+Question                                Reference
+─────────────────────────────────────────────────────────────────────────────
+What are the PH channels?                Section 4, Phase 1
+What's the Insurance Actuals layout?     Section 5
+How does QTD get computed?               Section 4, Phase 5 + Section 6
+Which months are closed vs live?         Section 6, buildQTDDescriptor()
+How does Freeze work now?                Section 4, Phase 7 + Section 9
+What's stored in localStorage?           Section 2 (localStorage keys table)
+How do I test prev quarter logic?        Section 13, Testing Checklist
+What are the AOP row maps?               Section 4, Phase 2
+How to debug cache issues?               Section 7, Issue 1
+What was the freeze refactor?            Section 9, Recent Changes
+
+─────────────────────────────────────────────────────────────────────────────
+
+CONTACT / ESCALATION:
+─────────────────────────────────────────────────────────────────────────────
+
+If you hit blockers:
+1. Check Known Issues (section 7) first
+2. Cross-reference Testing Checklist (section 13)
+3. Review the specific phase documentation for context
+4. Check function signatures in section 6 for parameter order
+5. Verify file IDs are correct (section 3)
+
+─────────────────────────────────────────────────────────────────────────────
+
+GOOD LUCK! The project is well-documented and production-ready. 
+Your job is to find & fix edge cases and wire up Phase 8 (Encode).
+
+Start with PROJECT_SUMMARY.md. Everything else cascades from there.
+
+═══════════════════════════════════════════════════════════════════════════════

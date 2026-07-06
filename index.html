@@ -1,0 +1,2119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SEA Insurance MIS Dashboard</title>
+
+<!-- SheetJS for XLSX export — loaded first so it's ready when Freeze fires -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<style>
+/* ── RESET + BASE ─────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;font-size:12px;background:#f0f2f5;color:#222;min-height:100vh}
+
+/* ── TITLE BAR ────────────────────────────────────────────── */
+.title-bar{background:#1F3864;color:#fff;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.title-bar h1{font-size:15px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.subtitle{font-size:10px;opacity:.7;letter-spacing:.06em}
+.refresh-info{font-size:10px;opacity:.65;text-align:right}
+
+/* ── TAB BAR ──────────────────────────────────────────────── */
+.tab-bar{background:#162d56;display:flex;align-items:center;padding:0 16px;border-bottom:2px solid #e0e4ea}
+.tab-btn{padding:9px 22px;border:none;background:transparent;color:rgba(255,255,255,.6);font-size:12px;font-weight:600;letter-spacing:.06em;cursor:pointer;border-bottom:3px solid transparent;transition:color .15s,border-color .15s;margin-bottom:-2px}
+.tab-btn:hover{color:#fff}
+.tab-btn.active{color:#fff;border-bottom-color:#4fc3f7}
+
+/* ── CONTROLS BAR ─────────────────────────────────────────── */
+.controls-bar{background:#fff;border-bottom:1px solid #dde2ea;padding:8px 16px;display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.controls-bar label{font-size:11px;font-weight:600;color:#444;white-space:nowrap}
+
+/* Date inputs replacing the old month dropdown */
+.date-input{padding:4px 8px;border:1px solid #c0c8d8;border-radius:4px;font-size:11px;background:#f7f9fc;color:#1F3864;font-weight:600;cursor:pointer;min-width:130px}
+.date-input:focus{outline:2px solid #4fc3f7;border-color:#4fc3f7}
+.date-sep{font-size:11px;color:#888;font-weight:500}
+
+/* Frozen range indicator */
+.frozen-range-label{font-size:10px;color:#e65100;font-weight:600;background:#fff3e0;border:1px solid #ffcc80;padding:2px 8px;border-radius:4px;display:none}
+.frozen-range-label.visible{display:inline-flex;align-items:center;gap:4px}
+
+/* Buttons */
+.btn{padding:5px 14px;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.03em;transition:opacity .15s,transform .1s}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.38;cursor:not-allowed}
+.btn-freeze  {background:#e65100;color:#fff}
+.btn-unfreeze{background:#6d4c41;color:#fff}
+.btn-encode  {background:#2e7d32;color:#fff}
+.btn-flash   {background:#00838f;color:#fff}
+.btn-next    {background:#5e35b1;color:#fff}
+/* Generated-flash-file link chip (appears after Create Flash succeeds) */
+.flash-link{display:none;align-items:center;gap:5px;font-size:10px;font-weight:600;color:#006064;background:#e0f7fa;border:1px solid #80deea;padding:3px 9px;border-radius:4px;text-decoration:none}
+.flash-link.visible{display:inline-flex}
+.flash-link:hover{background:#b2ebf2}
+.btn-refresh {background:#1F3864;color:#fff}
+
+/* Status badge */
+.status-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:12px;font-size:10px;font-weight:600;letter-spacing:.04em}
+.status-live   {background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7}
+.status-frozen {background:#fff3e0;color:#e65100;border:1px solid #ffcc80}
+.status-encoded{background:#e3f2fd;color:#1565c0;border:1px solid #90caf9}
+.status-dot{width:6px;height:6px;border-radius:50%}
+.status-live    .status-dot{background:#43a047}
+.status-frozen  .status-dot{background:#e65100}
+.status-encoded .status-dot{background:#1976d2}
+.stale-warn{display:none;background:#fff8e1;border:1px solid #ffd54f;color:#795548;font-size:10px;padding:3px 10px;border-radius:4px}
+
+/* ── TAB PANELS ───────────────────────────────────────────── */
+.tab-panel{display:none;padding:12px 12px 20px}
+.tab-panel.active{display:block}
+.loading-overlay{display:none;text-align:center;padding:40px;color:#888;font-size:13px}
+.loading-overlay.visible{display:block}
+.spinner{display:inline-block;width:20px;height:20px;border:3px solid #dde2ea;border-top-color:#1F3864;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── MIS TABLE ────────────────────────────────────────────── */
+.table-wrap{overflow-x:auto}
+table.mis{border-collapse:collapse;min-width:100%;font-size:11px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+table.mis th,table.mis td{border:1px solid #c8cfd8;padding:3px 7px;text-align:right}
+table.mis td.row-label{text-align:left;font-size:10.5px;color:#444;white-space:nowrap;min-width:130px;padding-left:10px}
+.col-hdr{font-size:10px;font-weight:700;text-align:center !important}
+.col-hdr-label{background:#1F3864;color:#fff;text-align:left !important;padding-left:8px}
+/* PH column colours */
+.col-act    {background:#E2EFDA;color:#1e4620;font-weight:700}
+.col-pt     {background:#D5F0EA;color:#1a4a3a;font-weight:600}
+.col-aop    {background:#F2F2F2;color:#555;font-style:italic}
+.col-qtd    {background:#DDEEFF;color:#0d2b52;font-weight:700}
+.col-qtd-pt {background:#CCE8E0;color:#1a4a3a;font-weight:600}
+.col-qtd-aop{background:#F2F2F2;color:#555;font-style:italic}
+.col-prev   {background:#EEF3FB;color:#1a3a6e}
+.col-prevmon{background:#FFF4E0;color:#7a4a00}
+/* INDO column colours */
+.col-ind-act {background:#E2EFDA;color:#1e4620;font-weight:700}
+.col-ind-aop {background:#F2F2F2;color:#555;font-style:italic}
+.col-ind-qtd {background:#DDEEFF;color:#0d2b52;font-weight:700}
+.col-ind-qaop{background:#F2F2F2;color:#555;font-style:italic}
+.col-ind-prev{background:#EEF3FB;color:#1a3a6e}
+.col-ind-prevmon{background:#FFF4E0;color:#7a4a00}
+/* Channel header rows */
+.ch-hdr td{font-size:10.5px;font-weight:700;padding:4px 8px;text-align:left !important;letter-spacing:.03em;text-transform:uppercase;border-top:2px solid #aab2c0}
+.ch-pink  td{background:#FADADD;color:#5a1a22}
+.ch-blue  td{background:#D6E4F0;color:#1a2e52}
+.ch-grey  td{background:#D4D4D4;color:#333}
+.ch-navy  td{background:#1F3864;color:#fff}
+.row-pct td{font-style:italic}
+.dash{color:#bbb;font-style:normal}
+/* Collapsible channel headers */
+.ch-hdr{cursor:pointer;user-select:none}
+.ch-hdr:hover td{filter:brightness(0.95)}
+.ch-hdr[data-static="1"]{cursor:default}
+.ch-hdr[data-static="1"]:hover td{filter:none}
+.ch-hdr.ch-leaf{cursor:default}
+.ch-hdr.ch-leaf:hover td{filter:none}
+.ch-hdr.row-hidden{display:none}
+.ch-chevron{display:inline-block;width:11px;font-size:9px;margin-right:5px;transition:transform .15s}
+.ch-hdr.collapsed .ch-chevron{transform:rotate(-90deg)}
+.mis-metric-row.row-hidden{display:none}
+/* Row-level hide/show toggle */
+.row-eye{display:inline-block;width:14px;cursor:pointer;opacity:.35;font-size:10px;margin-right:5px;user-select:none}
+.row-eye:hover{opacity:.9}
+/* Channel-level hide/show toggle (hides the whole channel block) */
+.ch-eye{display:inline-block;width:16px;cursor:pointer;opacity:.45;font-size:11px;margin-right:6px;user-select:none}
+.ch-eye:hover{opacity:1}
+/* Frozen view overlay */
+.frozen-overlay{position:relative}
+.frozen-overlay::after{content:'FROZEN';position:absolute;top:6px;right:10px;background:#e65100;color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:3px;letter-spacing:.06em;pointer-events:none}
+
+/* ── FOOTNOTE ─────────────────────────────────────────────── */
+.footnote{margin-top:10px;padding:8px 12px;background:#fff;border:1px solid #dde2ea;border-radius:4px;font-size:10px;color:#666;line-height:1.7}
+.footnote strong{color:#333}
+
+/* ── TOAST ────────────────────────────────────────────────── */
+.toast{position:fixed;bottom:24px;right:24px;padding:10px 18px;border-radius:6px;font-size:12px;font-weight:600;color:#fff;z-index:999;opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s;pointer-events:none}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.ok {background:#2e7d32}
+.toast.err{background:#c62828}
+.toast.info{background:#1565c0}
+
+/* ── PASSTHROUGH MANUAL ENTRY PANEL (PH only) ─────────────── */
+.pt-panel{background:#fff;border:1px solid #cdd6e4;border-radius:6px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow:hidden}
+.pt-head{background:#0d2b52;color:#fff;padding:7px 12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
+.pt-head h3{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;display:flex;align-items:center;gap:7px}
+.pt-head .pt-chevron{font-size:11px;transition:transform .2s}
+.pt-panel.collapsed .pt-chevron{transform:rotate(-90deg)}
+.pt-head .pt-pool{font-size:10px;font-weight:600;opacity:.85}
+.pt-body{padding:10px 12px}
+.pt-panel.collapsed .pt-body{display:none}
+.pt-grid{border-collapse:collapse;font-size:11px;width:auto}
+.pt-grid th,.pt-grid td{border:1px solid #cdd6e4;padding:3px 8px;text-align:right;white-space:nowrap}
+.pt-grid th{background:#eef2f8;color:#1F3864;font-weight:700;text-align:center;font-size:10px}
+.pt-grid td.pt-ch{background:#1F3864;color:#fff;font-weight:700;text-align:left;letter-spacing:.04em}
+.pt-grid td.pt-lbl{text-align:left;color:#444;background:#fafbfd}
+.pt-grid td.pt-total{background:#DDEEFF;color:#0d2b52;font-weight:700}
+.pt-grid td.pt-auto{background:#f3f5f9;color:#777;font-style:italic}
+.pt-grid input.pt-in{width:90px;border:1px solid #c0c8d8;border-radius:3px;padding:2px 5px;font-size:11px;text-align:right;font-weight:600;color:#0d2b52;background:#fffef7}
+.pt-grid input.pt-in:focus{outline:2px solid #4fc3f7;border-color:#4fc3f7;background:#fff}
+.pt-grid input.pt-in:disabled{background:#eceff4;color:#999;font-weight:500}
+.pt-foot{display:flex;align-items:center;gap:10px;margin-top:9px;flex-wrap:wrap}
+.pt-foot .pt-check{font-size:10px;color:#555}
+.pt-foot .pt-check b{color:#0d2b52}
+.pt-btn{padding:5px 16px;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:.03em}
+.pt-btn:active{transform:scale(.97)}
+.pt-btn:disabled{opacity:.4;cursor:not-allowed}
+.pt-btn-submit{background:#0d6b3f;color:#fff}
+.pt-btn-clear {background:#8a8f99;color:#fff}
+.pt-note{font-size:9.5px;color:#888;margin-top:7px;line-height:1.6}
+.pt-locked-msg{display:none;font-size:10px;color:#e65100;font-weight:600;background:#fff3e0;border:1px solid #ffcc80;padding:2px 8px;border-radius:4px}
+.pt-panel.frozen .pt-locked-msg{display:inline-flex}
+</style>
+</head>
+<body>
+
+<!-- ── TITLE BAR ─────────────────────────────────────────── -->
+<div class="title-bar">
+  <div>
+    <h1>SEA Insurance MIS Dashboard</h1>
+    <div class="subtitle">FY27 &middot; Philippines &amp; Indonesia &middot; USD</div>
+  </div>
+  <div class="refresh-info" id="refreshInfo">&mdash;</div>
+</div>
+
+<!-- ── TAB BAR ───────────────────────────────────────────── -->
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('PH')">&#127477;&#127469; Philippines</button>
+  <button class="tab-btn"        onclick="switchTab('INDO')">&#127470;&#127465; Indonesia</button>
+  <button class="tab-btn"        onclick="switchTab('SEA')">&#127758; SEA Total</button>
+</div>
+
+<!-- ── CONTROLS BAR ─────────────────────────────────────── -->
+<div class="controls-bar">
+
+  <label for="startDate">From:</label>
+  <input type="date" id="startDate" class="date-input"
+         value="2026-05-01" min="2026-04-01" max="2027-03-31"
+         onchange="onDateChange()">
+
+  <span class="date-sep">&#8594;</span>
+
+  <label for="endDate">To:</label>
+  <input type="date" id="endDate" class="date-input"
+         value="2026-05-31" min="2026-04-01" max="2027-03-31"
+         onchange="onDateChange()">
+
+  <button class="btn btn-refresh" onclick="loadAll()">&#8635; Refresh</button>
+
+  <span class="frozen-range-label" id="frozenRangeLabel">&#128274; Frozen</span>
+
+  <span id="statusBadge" class="status-badge status-live">
+    <span class="status-dot"></span>
+    <span id="statusText">Live</span>
+  </span>
+
+  <span class="stale-warn" id="staleWarn">&#9888; Showing cached data</span>
+  <div style="flex:1"></div>
+
+  <button class="btn btn-unfreeze" id="btnUnfreeze"
+          onclick="doUnfreeze()" disabled title="Return this date range to Live mode">
+    &#8634; Return to Live
+  </button>
+
+  <button class="btn btn-freeze" id="btnFreeze"
+          onclick="doFreeze()" disabled
+          title="Freeze data for this range and export to Excel">
+    &#128274; Freeze &amp; Export
+  </button>
+
+  <button class="btn btn-encode" id="btnEncode"
+          onclick="doEncode()" disabled title="Write frozen data to Insurance Actuals">
+    &#9999; Encode
+  </button>
+
+  <button class="btn btn-flash" id="btnFlash"
+          onclick="doCreateFlash()" disabled
+          title="Generate the monthly Flash File from the live source sheets for this frozen window">
+    &#128228; Create Flash
+  </button>
+
+  <button class="btn btn-refresh" id="btnExportSEA"
+          onclick="doExportSEA()" style="display:none"
+          title="Export the combined SEA (PH + INDO) view to Excel">
+    &#128190; Export SEA
+  </button>
+
+  <a class="flash-link" id="flashLink" href="#" target="_blank" rel="noopener">
+    &#128196; <span id="flashLinkText">Open flash file</span>
+  </a>
+
+  <button class="btn btn-next" id="btnNext"
+          onclick="applyNextPeriod()" disabled
+          title="Start the next reporting period from the day after the last frozen end date">
+    &#9654;&#9654; Next period
+  </button>
+</div>
+
+<!-- ── PH PANEL ──────────────────────────────────────────── -->
+<div class="tab-panel active" id="panel-PH">
+  <div class="loading-overlay" id="loading-PH">
+    <span class="spinner"></span>Fetching Philippines data&hellip;
+  </div>
+  <div id="content-PH" style="display:none">
+    <div id="pt-PH"></div>
+    <div class="table-wrap" id="wrap-PH">
+      <table class="mis" id="table-PH"></table>
+    </div>
+    <div class="footnote" id="fn-PH"></div>
+  </div>
+</div>
+
+<!-- ── INDO PANEL ────────────────────────────────────────── -->
+<div class="tab-panel" id="panel-INDO">
+  <div class="loading-overlay" id="loading-INDO">
+    <span class="spinner"></span>Fetching Indonesia data&hellip;
+  </div>
+  <div id="content-INDO" style="display:none">
+    <div class="table-wrap" id="wrap-INDO">
+      <table class="mis" id="table-INDO"></table>
+    </div>
+    <div class="footnote" id="fn-INDO"></div>
+  </div>
+</div>
+
+<!-- ── SEA PANEL (derived, read-only — PH + INDO combined) ─── -->
+<div class="tab-panel" id="panel-SEA">
+  <div class="loading-overlay" id="loading-SEA">
+    <span class="spinner"></span>Combining Philippines &amp; Indonesia data&hellip;
+  </div>
+  <div id="content-SEA" style="display:none">
+    <div class="table-wrap" id="wrap-SEA">
+      <table class="mis" id="table-SEA"></table>
+    </div>
+    <div class="footnote" id="fn-SEA"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  DASHBOARD DATA FLOW — read this first when debugging a wrong/blank col ║
+// ╠═══════════════════════════════════════════════════════════════════════╣
+// ║  COLUMN  →  RESULT FIELD          →  BACKEND CALL        →  SOURCE      ║
+// ║  Range Actuals     rangeActuals     getActuals            NAV summary   ║
+// ║  w/ Passthrough    rangeActuals+PT  (client-side overlay) localStorage  ║
+// ║  Range AOP         aopRange         getAOP().channels     AOP file      ║
+// ║  QTD Actuals       qtdActuals       getActualsFromFile    Insurance Act.║
+// ║  QTD w/ PT         qtdActuals+PT    (client-side overlay) localStorage  ║
+// ║  QTD AOP           aopQTD           getAOP().qtd          AOP file      ║
+// ║  Prev Qtr Actuals  prevQtrActuals   getActualsFromFile    Insurance Act.║
+// ║                                                                         ║
+// ║  UNIT NOTE: Insurance Actuals stores values in USD K. Live NAV now      ║
+// ║  stores values in raw USD. Closed-month results from getActualsFromFile ║
+// ║  are scaled ×1000 before being summed with live NAV to form qtdActuals. ║
+// ║  prevQtrActuals is also scaled ×1000 for the same reason.               ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 1 — REFERENCE MAPS
+// ═══════════════════════════════════════════════════════════
+
+const QUARTERS = {
+  'Apr-26':['Apr-26'],
+  'May-26':['Apr-26','May-26'],
+  'Jun-26':['Apr-26','May-26','Jun-26'],
+  'Jul-26':['Jul-26'],
+  'Aug-26':['Jul-26','Aug-26'],
+  'Sep-26':['Jul-26','Aug-26','Sep-26'],
+  'Oct-26':['Oct-26'],
+  'Nov-26':['Oct-26','Nov-26'],
+  'Dec-26':['Oct-26','Nov-26','Dec-26'],
+  'Jan-27':['Jan-27'],
+  'Feb-27':['Jan-27','Feb-27'],
+  'Mar-27':['Jan-27','Feb-27','Mar-27']
+};
+
+const QUARTER_LABELS = {
+  'Apr-26':'Q1 AMJ','May-26':'Q1 AMJ','Jun-26':'Q1 AMJ',
+  'Jul-26':'Q2 JAS','Aug-26':'Q2 JAS','Sep-26':'Q2 JAS',
+  'Oct-26':'Q3 OND','Nov-26':'Q3 OND','Dec-26':'Q3 OND',
+  'Jan-27':'Q4 JFM','Feb-27':'Q4 JFM','Mar-27':'Q4 JFM'
+};
+
+const PREV_QUARTER = {
+  'Q1 AMJ': null,
+  'Q2 JAS': ['Apr-26','May-26','Jun-26'],
+  'Q3 OND': ['Jul-26','Aug-26','Sep-26'],
+  'Q4 JFM': ['Oct-26','Nov-26','Dec-26']
+};
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 2 — ACTIVE STATE
+// ═══════════════════════════════════════════════════════════
+
+let activeTab   = 'PH';
+let activeStart = '2026-05-01';
+let activeEnd   = '2026-05-31';
+const dataCache = {};
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 3 — FREEZE STATE MACHINE
+// ═══════════════════════════════════════════════════════════
+
+function stateKey(country, s, e) { return 'mis_state_'+country+'_'+s+'_'+e; }
+function snapKey (country, s, e) { return 'mis_snap_' +country+'_'+s+'_'+e; }
+
+function getState(country, s, e) {
+  return localStorage.getItem(stateKey(country,s,e)) || 'LIVE';
+}
+function setState(country, s, e, val) {
+  localStorage.setItem(stateKey(country,s,e), val);
+}
+function saveSnap(country, s, e, data) {
+  try { localStorage.setItem(snapKey(country,s,e), JSON.stringify(data)); } catch(ex) {}
+}
+function loadSnap(country, s, e) {
+  try {
+    const raw = localStorage.getItem(snapKey(country,s,e));
+    return raw ? JSON.parse(raw) : null;
+  } catch(ex) { return null; }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 3a — COLLAPSIBLE CHANNELS / HIDEABLE ROWS / HIDEABLE CHANNELS
+//  Keyed per TAB only (PH/INDO/SEA), not per date range — this is a
+//  viewing preference that should survive date changes and refreshes.
+//
+//  Tree is now 2 levels: a subtotal (e.g. "B2C Subtotal") is the top-level
+//  collapsible parent (depth 0), its leaf channels are depth 1 children.
+//  The grand total (e.g. "Philippines Insurance") is `static:true` — it
+//  renders LAST, has no chevron/onclick, and is always visible; it is NOT
+//  part of the collapse tree.
+//
+//  Two independent hide mechanisms, both reset when their DIRECT PARENT
+//  subtotal is collapsed then re-expanded:
+//    - hidden ROWS: individual metric rows (NOPs, NP, Rev, etc.) within
+//      a still-visible channel, toggled via the eye icon on the row label.
+//    - hidden CHANNELS: an entire channel block (header + all its rows)
+//      removed from view, toggled via a second icon on the channel header.
+// ═══════════════════════════════════════════════════════════
+
+function collapsedKey(tab) { return 'mis_collapsed_' + tab; }
+function hiddenRowsKey(tab) { return 'mis_hidden_rows_' + tab; }
+function hiddenChannelsKey(tab) { return 'mis_hidden_channels_' + tab; }
+
+function getCollapsedChannels(tab) {
+  try {
+    var raw = localStorage.getItem(collapsedKey(tab));
+    return raw ? JSON.parse(raw) : [];
+  } catch(ex) { return []; }
+}
+function setCollapsedChannels(tab, arr) {
+  try { localStorage.setItem(collapsedKey(tab), JSON.stringify(arr)); } catch(ex) {}
+}
+function isChannelCollapsed(tab, chKey) {
+  return getCollapsedChannels(tab).indexOf(chKey) !== -1;
+}
+function setChannelCollapsedState(tab, chKey, collapsed) {
+  var arr = getCollapsedChannels(tab);
+  var idx = arr.indexOf(chKey);
+  if (collapsed) {
+    if (idx === -1) arr.push(chKey);
+  } else {
+    if (idx !== -1) arr.splice(idx, 1);
+  }
+  setCollapsedChannels(tab, arr);
+}
+
+function getHiddenRows(tab) {
+  try {
+    var raw = localStorage.getItem(hiddenRowsKey(tab));
+    return raw ? JSON.parse(raw) : [];
+  } catch(ex) { return []; }
+}
+function setHiddenRows(tab, arr) {
+  try { localStorage.setItem(hiddenRowsKey(tab), JSON.stringify(arr)); } catch(ex) {}
+}
+function rowToken(chKey, rowKey) { return chKey + ':' + rowKey; }
+function isRowHidden(tab, chKey, rowKey) {
+  return getHiddenRows(tab).indexOf(rowToken(chKey, rowKey)) !== -1;
+}
+function toggleRowHidden(tab, chKey, rowKey) {
+  var arr = getHiddenRows(tab);
+  var tok = rowToken(chKey, rowKey);
+  var idx = arr.indexOf(tok);
+  if (idx === -1) arr.push(tok); else arr.splice(idx, 1);
+  setHiddenRows(tab, arr);
+}
+function clearHiddenRowsForChannel(tab, chKey) {
+  var arr = getHiddenRows(tab).filter(function(tok) { return tok.indexOf(chKey + ':') !== 0; });
+  setHiddenRows(tab, arr);
+}
+
+function getHiddenChannels(tab) {
+  try {
+    var raw = localStorage.getItem(hiddenChannelsKey(tab));
+    return raw ? JSON.parse(raw) : [];
+  } catch(ex) { return []; }
+}
+function setHiddenChannels(tab, arr) {
+  try { localStorage.setItem(hiddenChannelsKey(tab), JSON.stringify(arr)); } catch(ex) {}
+}
+function isChannelHidden(tab, chKey) {
+  return getHiddenChannels(tab).indexOf(chKey) !== -1;
+}
+function toggleChannelHidden(tab, chKey) {
+  var arr = getHiddenChannels(tab);
+  var idx = arr.indexOf(chKey);
+  if (idx === -1) arr.push(chKey); else arr.splice(idx, 1);
+  setHiddenChannels(tab, arr);
+}
+
+// DOM-only toggle handlers — called from onclick, avoid a full table
+// re-render (cheap for a click, keeps scroll position stable).
+//
+// Cascading collapse: walk forward through this header's sibling <tr>s.
+// Every row belongs to this parent's subtree until we hit ANOTHER header
+// row (class ch-hdr) whose data-depth is <= this header's own depth —
+// that marks a sibling's next block, i.e. the end of this subtree.
+//
+// On COLLAPSE: every descendant row/header in the subtree is hidden.
+// On EXPAND: every descendant channel's hidden-channel and hidden-row
+// state is cleared (reset to fully visible), per spec — collapsing then
+// re-expanding a subtotal brings back everything hidden underneath it.
+function onChannelHeaderClick(tab, chKey, headerRow) {
+  if (headerRow.getAttribute('data-static') === '1') return; // grand totals are non-interactive
+
+  var nowCollapsed = !isChannelCollapsed(tab, chKey);
+  setChannelCollapsedState(tab, chKey, nowCollapsed);
+  headerRow.classList.toggle('collapsed', nowCollapsed);
+
+  // Re-expanding: reset the clicked channel's OWN hidden rows too (e.g.
+  // B2C Subtotal's own Rev%/GM/GM% rows, rendered directly under its own
+  // header) — not just its descendants'. Without this, a row individually
+  // hidden on the parent itself would stay hidden forever since the sibling
+  // walk below only clears CHILD headers' hidden-row state, never the
+  // clicked channel's own.
+  if (!nowCollapsed) {
+    clearHiddenRowsForChannel(tab, chKey);
+    var hcSelf = getHiddenChannels(tab);
+    var hidxSelf = hcSelf.indexOf(chKey);
+    if (hidxSelf !== -1) { hcSelf.splice(hidxSelf, 1); setHiddenChannels(tab, hcSelf); }
+  }
+
+  var myDepth = parseInt(headerRow.getAttribute('data-depth'), 10);
+  var node = headerRow.nextElementSibling;
+  while (node) {
+    if (node.classList.contains('ch-hdr')) {
+      var nodeDepth = parseInt(node.getAttribute('data-depth'), 10);
+      if (nodeDepth <= myDepth) break; // sibling's next block — subtree ends here
+      var childKey = node.getAttribute('data-channel-self');
+      if (nowCollapsed) {
+        node.classList.add('row-hidden');
+      } else {
+        // Re-expanding: reset this child channel fully — visible again
+        // even if it had been individually hidden via its own eye icon.
+        node.classList.remove('row-hidden');
+        node.classList.remove('collapsed');
+        if (childKey) {
+          setChannelCollapsedState(tab, childKey, false);
+          var hc = getHiddenChannels(tab);
+          var hidx = hc.indexOf(childKey);
+          if (hidx !== -1) { hc.splice(hidx, 1); setHiddenChannels(tab, hc); }
+          clearHiddenRowsForChannel(tab, childKey);
+        }
+      }
+    } else if (node.classList.contains('mis-metric-row')) {
+      var rowChKey = node.getAttribute('data-channel');
+      var rowKey   = node.getAttribute('data-row');
+      if (nowCollapsed) {
+        node.classList.add('row-hidden');
+      } else {
+        var indivHidden = (rowKey && isRowHidden(tab, rowChKey, rowKey)) || isChannelHidden(tab, rowChKey);
+        node.classList.toggle('row-hidden', !!indivHidden);
+      }
+    }
+    node = node.nextElementSibling;
+  }
+}
+function onRowEyeClick(evt, tab, chKey, rowKey) {
+  evt.stopPropagation(); // don't let it bubble to the channel header's handler
+  toggleRowHidden(tab, chKey, rowKey);
+  var tr = evt.currentTarget.closest('tr');
+  tr.classList.toggle('row-hidden', isRowHidden(tab, chKey, rowKey));
+}
+// Hides an entire channel block (header + all its metric rows). Walks
+// forward through DOM siblings the same way collapse does, but starting
+// from THIS channel's own header (not a parent), so it only affects rows
+// belonging to this one channel — not siblings.
+function onChannelEyeClick(evt, tab, chKey, headerRow) {
+  evt.stopPropagation(); // don't trigger collapse too
+  toggleChannelHidden(tab, chKey);
+  var nowHidden = isChannelHidden(tab, chKey);
+  headerRow.classList.toggle('row-hidden', nowHidden);
+
+  var myDepth = parseInt(headerRow.getAttribute('data-depth'), 10);
+  var node = headerRow.nextElementSibling;
+  while (node) {
+    if (node.classList.contains('ch-hdr')) {
+      var nodeDepth = parseInt(node.getAttribute('data-depth'), 10);
+      if (nodeDepth <= myDepth) break;
+      node.classList.toggle('row-hidden', nowHidden);
+    } else if (node.classList.contains('mis-metric-row')) {
+      if (node.getAttribute('data-channel') !== chKey) break; // safety: shouldn't happen, but stop at boundary
+      node.classList.toggle('row-hidden', nowHidden);
+    }
+    node = node.nextElementSibling;
+  }
+}
+// Minimal attribute-safe escape for channel keys used in querySelector
+// (channel keys here are simple strings like "B2C", "B2B & Affiliates",
+// "UC Attached" — no quotes, so this just guards the unlikely case).
+function cssEscapeAttr(s) { return String(s).replace(/"/g, '\\"'); }
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 3b — PASSTHROUGH MANUAL ENTRY (PH only)
+// ═══════════════════════════════════════════════════════════
+
+const PT_RATE = 0.05;
+
+function ptKey(country, s, e) { return 'mis_pt_' + country + '_' + s + '_' + e; }
+
+function ptEmpty() {
+  return {
+    agNopsG:0, agNopsH:0, agNpG:0, agNpH:0,
+    b2bNopsG:0, b2bNopsH:0, b2bNpG:0, b2bNpH:0
+  };
+}
+function loadPTInputs(country, s, e) {
+  try {
+    const raw = localStorage.getItem(ptKey(country, s, e));
+    if (!raw) return null;
+    return Object.assign(ptEmpty(), JSON.parse(raw));
+  } catch(ex) { return null; }
+}
+function savePTInputs(country, s, e, obj) {
+  try { localStorage.setItem(ptKey(country, s, e), JSON.stringify(obj)); } catch(ex) {}
+}
+function clearPTInputs(country, s, e) {
+  try { localStorage.removeItem(ptKey(country, s, e)); } catch(ex) {}
+}
+
+function ptTotals(inp) {
+  inp = inp || ptEmpty();
+  function block(npG, npH, nopsG, nopsH) {
+    var revG = npG * PT_RATE;
+    var gmG  = npG * PT_RATE;
+    return {
+      nops: (nopsG || 0) + (nopsH || 0),
+      np:   (npG   || 0) + (npH   || 0),
+      rev:  revG,
+      gm:   gmG
+    };
+  }
+  return {
+    agency: block(inp.agNpG, inp.agNpH, inp.agNopsG, inp.agNopsH),
+    b2b:    block(inp.b2bNpG, inp.b2bNpH, inp.b2bNopsG, inp.b2bNopsH)
+  };
+}
+
+// UNIT NOTE: passthrough panel inputs are in raw USD (e.g. 238,441).
+// Live NAV is also now in raw USD. So no ÷1000 scaling needed here —
+// passthrough delta is added directly to raw USD base actuals.
+const PT_USD_TO_K = 1; // was 1000 when dashboard was USD K; now 1 since dashboard is raw USD
+function ptChannelDelta(channelKey, country, s, e) {
+  var zero = {nops:0,np:0,rev:0,gm:0};
+  if (country !== 'PH') return zero;
+  var inp = loadPTInputs(country, s, e);
+  if (!inp) return zero;
+  var t = ptTotals(inp);
+  function toUnit(b){ return {nops:b.nops, np:b.np/PT_USD_TO_K, rev:b.rev/PT_USD_TO_K, gm:b.gm/PT_USD_TO_K}; }
+  var ag = toUnit(t.agency), b2b = toUnit(t.b2b);
+  function sum(a,b){ return {nops:a.nops+b.nops, np:a.np+b.np, rev:a.rev+b.rev, gm:a.gm+b.gm}; }
+  switch (channelKey) {
+    case 'B2B & Affiliates':      return b2b;
+    case 'Agency':                return ag;
+    case 'B2B2C Subtotal':        return sum(b2b, ag);
+    case 'Philippines Insurance': return sum(b2b, ag);
+    default:                      return zero;
+  }
+}
+
+function addPT(base, delta) {
+  base = base || {};
+  return {
+    nops: (base.nops || 0) + (delta.nops || 0),
+    np:   (base.np   || 0) + (delta.np   || 0),
+    rev:  (base.rev  || 0) + (delta.rev  || 0),
+    gm:   (base.gm   || 0) + (delta.gm   || 0)
+  };
+}
+
+function ptHasData(country, s, e) {
+  var inp = loadPTInputs(country, s, e);
+  if (!inp) return false;
+  return Object.keys(inp).some(function(k){ return Number(inp[k]) !== 0; });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 4 — DATE RANGE UTILITIES
+// ═══════════════════════════════════════════════════════════
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function isoToMonthStr(iso) {
+  const d = new Date(iso + 'T00:00:00');
+  return MONTH_NAMES[d.getMonth()] + '-' + String(d.getFullYear()).slice(-2);
+}
+
+const QTR_STARTS = {
+  'Q1 AMJ':'2026-04-01', 'Q2 JAS':'2026-07-01',
+  'Q3 OND':'2026-10-01', 'Q4 JFM':'2027-01-01'
+};
+
+// Anchors on START (reporting month), not end, so an extended range like
+// Jun 1–Jul 3 stays in Q1, not Q2.
+function getQTDRange(reportMonth) {
+  var q = QUARTER_LABELS[isoToMonthStr(reportMonth)];
+  return { start: QTR_STARTS[q] || reportMonth, end: reportMonth };
+}
+
+const PREV_QTR_DESC = {
+  'Q1 AMJ': { fy:'FY26', qtr:'Q4', start:'2026-01-01', end:'2026-03-31', label:'FY26 Q4 (Jan–Mar 26)' },
+  'Q2 JAS': { fy:'FY27', qtr:'Q1', start:'2026-04-01', end:'2026-06-30', label:'FY27 Q1 (Apr–Jun 26)' },
+  'Q3 OND': { fy:'FY27', qtr:'Q2', start:'2026-07-01', end:'2026-09-30', label:'FY27 Q2 (Jul–Sep 26)' },
+  'Q4 JFM': { fy:'FY27', qtr:'Q3', start:'2026-10-01', end:'2026-12-31', label:'FY27 Q3 (Oct–Dec 26)' }
+};
+
+// Anchors on START (reporting month) — same reasoning as getQTDRange.
+function getPrevQtrDesc(reportMonth) {
+  var q = QUARTER_LABELS[isoToMonthStr(reportMonth)];
+  return q ? (PREV_QTR_DESC[q] || null) : null;
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso + 'T00:00:00');
+  return String(d.getDate()).padStart(2,'0') + ' ' + MONTH_NAMES[d.getMonth()] + ' ' + String(d.getFullYear()).slice(-2);
+}
+
+// Always shows only the reporting (start) month, never a start–end span.
+function rangeLabel(start, end) {
+  return isoToMonthStr(start);
+}
+
+function addDays(iso, n) {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function endOfMonth(iso) {
+  const d = new Date(iso + 'T00:00:00Z');
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0))
+           .toISOString().slice(0, 10);
+}
+
+// Sum multiple getActualsFromFile results into one { channels: {...} } object.
+// Callers must scale Insurance Actuals results (USD K → raw USD, ×1000)
+// BEFORE passing them here so all inputs are in the same unit.
+function sumActualsResults(results) {
+  var combined = { channels: {} };
+  results.forEach(function(res) {
+    if (!res || !res.channels) return;
+    Object.keys(res.channels).forEach(function(ch) {
+      if (!combined.channels[ch]) {
+        combined.channels[ch] = { nops: 0, np: 0, rev: 0, gm: 0 };
+      }
+      var src = res.channels[ch];
+      var dst = combined.channels[ch];
+      dst.nops += (src.nops || 0);
+      dst.np   += (src.np   || 0);
+      dst.rev  += (src.rev  || 0);
+      dst.gm   += (src.gm   || 0);
+    });
+  });
+  return combined;
+}
+
+// Scale np/rev/gm in an Insurance Actuals result from USD K → raw USD (×1000).
+// NOPs are counts — never scaled.
+// This is needed because Insurance Actuals stores values in USD K while the
+// live NAV summary now returns raw USD. Both must be in the same unit before
+// sumActualsResults combines them.
+function scaleActualsToRawUSD(res) {
+  if (!res || !res.channels) return res;
+  var scaled = { channels: {} };
+  Object.keys(res.channels).forEach(function(ch) {
+    var src = res.channels[ch];
+    scaled.channels[ch] = {
+      nops: src.nops,
+      np:   (src.np  || 0) * 1000,
+      rev:  (src.rev || 0) * 1000,
+      gm:   (src.gm  || 0) * 1000
+    };
+  });
+  return scaled;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 5 — ENTRY POINT & UI HANDLERS
+// ═══════════════════════════════════════════════════════════
+
+window.addEventListener('DOMContentLoaded', function() {
+  activeStart = document.getElementById('startDate').value;
+  activeEnd   = document.getElementById('endDate').value;
+  loadAll();
+});
+
+function switchTab(tab) {
+  activeTab = tab;
+  var labelMatch = { PH:'Philippines', INDO:'Indonesia', SEA:'SEA Total' };
+  document.querySelectorAll('.tab-btn').forEach(function(b) {
+    b.classList.toggle('active', b.textContent.indexOf(labelMatch[tab]) !== -1);
+  });
+  document.querySelectorAll('.tab-panel').forEach(function(p) {
+    p.classList.toggle('active', p.id === 'panel-' + tab);
+  });
+  updateControlBar();
+
+  if (tab === 'SEA') {
+    renderSEATab();
+    return;
+  }
+  var key = tab + ':' + activeStart + ':' + activeEnd;
+  if (!dataCache[key]) loadCountry(tab, activeStart, activeEnd, false);
+}
+
+function onDateChange() {
+  var s = document.getElementById('startDate').value;
+  var e = document.getElementById('endDate').value;
+  if (!s || !e) return;
+  if (e < s) { document.getElementById('endDate').value = s; e = s; }
+  if (s < '2026-04-01') { s = '2026-04-01'; document.getElementById('startDate').value = s; }
+  if (e > '2027-03-31') { e = '2027-03-31'; document.getElementById('endDate').value   = e; }
+
+  activeStart = s;
+  activeEnd   = e;
+
+  dataCache['PH:'   + s + ':' + e] = undefined;
+  dataCache['INDO:' + s + ':' + e] = undefined;
+
+  loadAll();
+}
+
+function loadAll() {
+  dataCache['PH:'   + activeStart + ':' + activeEnd] = undefined;
+  dataCache['INDO:' + activeStart + ':' + activeEnd] = undefined;
+  loadCountry('PH',   activeStart, activeEnd, true);
+  loadCountry('INDO', activeStart, activeEnd, true);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 6 — DATA LOADING
+// ═══════════════════════════════════════════════════════════
+
+async function loadCountry(country, start, end, forceFresh) {
+  showLoading(country, true);
+  document.getElementById('staleWarn').style.display = 'none';
+
+  var cacheKey = country + ':' + start + ':' + end;
+
+  // ── FROZEN STATE ──
+  if (getState(country, start, end) === 'FROZEN') {
+    var snap = loadSnap(country, start, end);
+    if (snap) {
+      dataCache[cacheKey] = snap;
+      renderTable(country, snap, start, end);
+      showLoading(country, false);
+      updateControlBar();
+      return;
+    }
+  }
+
+  // ── LIVE STATE ──
+  try {
+    // Quarter anchoring always uses START (reporting month), never end.
+    // An extended end date (e.g. Jun 1–Jul 3) must not pull the report into Q2.
+    var qtdRange = getQTDRange(start);
+    var prevDesc = getPrevQtrDesc(start);
+
+    // ── 1. Prev quarter — Insurance Actuals file (quarterly column, USD K)
+    //       Scaled ×1000 → raw USD to match live NAV unit.
+    var prevQtrActuals = null;
+    if (prevDesc) {
+      var prevRaw = await runScript('getActualsFromFile', country, '', prevDesc.fy, true, prevDesc.qtr);
+      // Insurance Actuals is in USD K; scale to raw USD to match live NAV.
+      prevQtrActuals = scaleActualsToRawUSD(prevRaw);
+    }
+
+    // ── 2. QTD actuals — closed prior months from Insurance Actuals (USD K)
+    //       + live reporting-month from NAV (raw USD).
+    //
+    //       The reporting month is NOT re-read from the Actuals file because
+    //       that file is only updated once a month closes — it would be stale
+    //       or zero for the current in-progress month. Instead the live NAV
+    //       rangeActuals covers it.
+    //
+    //       e.g. start = May-26 → Apr-26 (closed, scaled) + live May range
+    //       e.g. start = Jun-26 → Apr-26 + May-26 (closed, scaled) + live Jun range
+
+    var allQtrMonths = QUARTERS[isoToMonthStr(start)];  // e.g. ['Apr-26','May-26']
+    var closedMonths = allQtrMonths.slice(0, -1);         // all except the reporting month
+
+    // Fetch each closed month from Insurance Actuals (returns USD K)
+    var monthResultsRaw = await Promise.all(
+      closedMonths.map(function(m) {
+        return runScript('getActualsFromFile', country, m, 'FY27', false, '');
+      })
+    );
+
+    // ── 3. Range actuals — live NAV (raw USD), always fetched last so
+    //       B1/B2 in the summary sheet ends on the user's selected dates.
+    var rangeActuals = await runScript('getActuals', country, start, end, forceFresh || false);
+
+    // Scale closed months USD K → raw USD, then sum with live reporting month.
+    var scaledMonthResults = monthResultsRaw.map(scaleActualsToRawUSD);
+    var qtdActuals = sumActualsResults(scaledMonthResults.concat([rangeActuals]));
+
+    // ── 2b. Prior months of the current quarter, kept individually (not just
+    //       summed) so the dashboard can show one column per closed month
+    //       between "Q1 AMJ AOP" and "Prev Qtr Actuals". Labeled by month
+    //       string (e.g. 'Apr-26') so rendering works for any quarter/position.
+    //       closedMonths / scaledMonthResults are already computed above for
+    //       QTD — this just pairs each with its label instead of discarding it.
+    var priorMonths = closedMonths.map(function(m, i) {
+      return { label: m, data: scaledMonthResults[i] };
+    });
+
+    // ── 4. AOP — read-only, anchored on START month (reporting month).
+    var lastMonth = isoToMonthStr(start);
+    var aopData   = await runScript('getAOP', country, lastMonth);
+
+    var result = {
+      rangeActuals:   rangeActuals,
+      qtdActuals:     qtdActuals,
+      prevQtrActuals: prevQtrActuals,
+      aopRange:       { channels: aopData.channels },
+      aopQTD:         { channels: aopData.qtd },
+      ts:             new Date().toISOString(),
+      qtdRange:       qtdRange,
+      prevRange:      prevDesc,
+      priorMonths:    priorMonths
+    };
+
+    dataCache[cacheKey] = result;
+    renderTable(country, result, start, end);
+
+    // Keep the SEA combined view in sync if it's the tab currently showing —
+    // it has no fetch of its own, so a PH/INDO refresh must re-trigger it.
+    if (activeTab === 'SEA' && start === activeStart && end === activeEnd) {
+      var seaData = buildSEAData(activeStart, activeEnd);
+      if (seaData) renderSEA(seaData, activeStart, activeEnd);
+    }
+
+    document.getElementById('refreshInfo').textContent =
+      'Last refreshed: ' + new Date().toLocaleString('en-GB',
+        {day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+
+    showLoading(country, false);
+    updateControlBar();
+
+  } catch(err) {
+    showLoading(country, false);
+    if (dataCache[cacheKey]) {
+      document.getElementById('staleWarn').style.display = 'inline-flex';
+      renderTable(country, dataCache[cacheKey], start, end);
+    } else {
+      document.getElementById('content-' + country).innerHTML =
+        '<div style="padding:20px;color:#c62828">&#9888; Could not load data: '
+        + err.message + '</div>';
+      document.getElementById('content-' + country).style.display = 'block';
+    }
+  }
+}
+
+function runScript(funcName) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function(resolve, reject) {
+    var runner = google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(function(e) { reject(new Error(e.message || String(e))); });
+    runner[funcName].apply(runner, args);
+  });
+}
+
+function showLoading(country, on) {
+  document.getElementById('loading-' + country).classList.toggle('visible', on);
+  document.getElementById('content-' + country).style.display = on ? 'none' : 'block';
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 7 — TABLE RENDERING
+// ═══════════════════════════════════════════════════════════
+
+function renderTable(country, data, start, end) {
+  if (country === 'PH') renderPH(data, start, end);
+  else                   renderINDO(data, start, end);
+}
+
+// ── Shared builders for collapsible channel headers / hideable rows ──
+// Used identically by renderPH, renderINDO, and renderSEA so the click
+// behavior and markup stay in sync across all three tables.
+
+// Walks the parent chain (via the channel list's `parent` links) to
+// determine whether this channel is hidden because IT is collapsed,
+// because it's individually HIDDEN (channel eye icon), or because any
+// ANCESTOR is collapsed/hidden. Needed at initial-render time since
+// there's no DOM yet to cascade through (that only happens on click).
+function isChannelEffectivelyCollapsed(tab, ch, allChannels) {
+  var byKey = {};
+  allChannels.forEach(function(c) { byKey[c.key] = c; });
+  var cur = ch;
+  while (cur) {
+    if (!cur.static && isChannelCollapsed(tab, cur.key)) return true;
+    if (isChannelHidden(tab, cur.key)) return true;
+    cur = cur.parent ? byKey[cur.parent] : null;
+  }
+  return false;
+}
+
+function chHeaderHtml(tab, ch, colspan, allChannels) {
+  if (ch.static) {
+    // Grand total: always visible, no chevron, no click handler, no
+    // channel-hide eye icon either — it's a fixed summary row.
+    return '<tr class="ch-hdr '+ch.cls+'" data-tab="'+tab+'" data-channel-self="'
+      +ch.key.replace(/"/g,'&quot;')+'" data-depth="'+(ch.depth||0)+'" data-static="1">'
+      +'<td colspan="'+colspan+'" style="padding-left:8px">'+ch.label+'</td></tr>';
+  }
+  var ownCollapsed     = isChannelCollapsed(tab, ch.key);
+  var ownHidden        = isChannelHidden(tab, ch.key);
+  var hiddenByAncestor = ancestorViaParentCollapsed(tab, ch, allChannels);
+  var depth  = ch.depth || 0;
+  var indent = depth * 16;
+  var isLeaf = !!ch.parent;
+  // Leaf channels have nothing beneath them to cascade to, so they get
+  // no chevron and no header-click collapse handler — only the eye icon
+  // (hide this channel entirely). Top-level subtotal parents keep the
+  // full collapse/expand behavior.
+  var eyeHtml = isLeaf
+    ? '<span class="ch-eye" title="Hide this channel" '
+      +'onclick="onChannelEyeClick(event,\''+tab+'\',\''+ch.key.replace(/'/g,"\\'")+'\', this.closest(\'tr\'))">&#128065;</span>'
+    : '';
+  var clickAttr = isLeaf ? '' : ' onclick="onChannelHeaderClick(\''+tab+'\',\''+ch.key.replace(/'/g,"\\'")+'\', this)"';
+  return '<tr class="ch-hdr '+ch.cls+(ownCollapsed?' collapsed':'')+((hiddenByAncestor||ownHidden)?' row-hidden':'')+(isLeaf?' ch-leaf':'')+'" '
+    +'data-tab="'+tab+'" data-channel-self="'+ch.key.replace(/"/g,'&quot;')+'" data-depth="'+depth+'"'+clickAttr+'>'
+    +'<td colspan="'+colspan+'" style="padding-left:'+(8+indent)+'px">'
+    +(isLeaf ? '' : '<span class="ch-chevron">&#9660;</span>')
+    +eyeHtml+ch.label+'</td></tr>';
+}
+// True if any ANCESTOR (not the channel itself) is collapsed or hidden.
+function ancestorViaParentCollapsed(tab, ch, allChannels) {
+  var byKey = {};
+  allChannels.forEach(function(c) { byKey[c.key] = c; });
+  var cur = ch.parent ? byKey[ch.parent] : null;
+  while (cur) {
+    if (!cur.static && isChannelCollapsed(tab, cur.key)) return true;
+    if (isChannelHidden(tab, cur.key)) return true;
+    cur = cur.parent ? byKey[cur.parent] : null;
+  }
+  return false;
+}
+
+function rowTrOpenHtml(tab, ch, row, allChannels) {
+  var effectivelyCollapsed = isChannelEffectivelyCollapsed(tab, ch, allChannels);
+  var hidden = effectivelyCollapsed || isRowHidden(tab, ch.key, row.key);
+  return '<tr class="mis-metric-row'+(row.pct?' row-pct':'')+(hidden?' row-hidden':'')+'" '
+    +'data-tab="'+tab+'" data-channel="'+ch.key.replace(/"/g,'&quot;')+'" data-row="'+row.key+'">';
+}
+
+function rowLabelCellHtml(tab, chKey, row, depth) {
+  var indent = (depth || 0) * 16;
+  return '<td class="row-label" style="padding-left:'+(10+indent)+'px">'
+    +'<span class="row-eye" title="Hide this row" '
+    +'onclick="onRowEyeClick(event,\''+tab+'\',\''+chKey.replace(/'/g,"\\'")+'\',\''+row.key+'\')">&#128065;</span>'
+    +row.label+'</td>';
+}
+
+// Nested channel tree for PH. `depth` controls indentation (0=top-level
+// collapsible parent, 1=leaf channel); `parent` is the key of the direct
+// parent (null for top-level) — used to cascade collapse state downward.
+// The grand total ('Philippines Insurance') is `static:true`: it renders
+// last, has no chevron/onclick, and is always visible — it does not
+// participate in the collapse tree at all.
+var PH_CHANNELS = [
+  {key:'B2C Subtotal',         label:'B2C Subtotal',         cls:'ch-grey', depth:0, parent:null},
+  {key:'B2C',                  label:'B2C',                  cls:'ch-pink', depth:1, parent:'B2C Subtotal'},
+  {key:'Renewal',              label:'Renewal',              cls:'ch-blue', depth:1, parent:'B2C Subtotal'},
+  {key:'B2B2C Subtotal',       label:'B2B2C Subtotal',       cls:'ch-grey', depth:0, parent:null},
+  {key:'Branch',               label:'Branch',               cls:'ch-pink', depth:1, parent:'B2B2C Subtotal'},
+  {key:'UC Attached',          label:'UC Attached',          cls:'ch-blue', depth:1, parent:'B2B2C Subtotal'},
+  {key:'B2B & Affiliates',     label:'B2B & Affiliates',     cls:'ch-pink', depth:1, parent:'B2B2C Subtotal'},
+  {key:'Agency',               label:'Agency',               cls:'ch-blue', depth:1, parent:'B2B2C Subtotal'},
+  {key:'Philippines Insurance',label:'Philippines Insurance',cls:'ch-navy', depth:0, parent:null, static:true}
+];
+var PH_ROWS = [
+  {key:'nops',  label:'Issued NOPs',          fmt:'int', pct:false},
+  {key:'np',    label:'Net Premium* (USD)',    fmt:'num', pct:false},
+  {key:'rev',   label:'Revenue* (USD)',        fmt:'num', pct:false},
+  {key:'revpct',label:'Rev %',                fmt:'pct', pct:true },
+  {key:'gm',    label:'Gross Margin* (USD)',  fmt:'num', pct:false},
+  {key:'gmpct', label:'GM %',                 fmt:'pct', pct:true }
+];
+
+
+
+
+function renderPH(d, start, end) {
+  var rng      = rangeLabel(start, end);
+  var lastM    = isoToMonthStr(start);
+  var qLbl     = QUARTER_LABELS[lastM] || 'QTD';
+  var hasPrev  = !!d.prevQtrActuals;
+  var isFrozen = getState('PH', start, end) === 'FROZEN';
+
+  // Two prior-month columns (closed months of the current quarter, from
+  // Insurance Actuals). Always render exactly 2 slots so table width is
+  // stable; fill left-to-right and show '–' for quarters with fewer than
+  // 2 closed months (e.g. reporting month = Apr → 0 prior months,
+  // May → 1 prior month).
+  var pm = (d.priorMonths || []).slice(0, 2);
+  while (pm.length < 2) pm.push(null);
+
+  var colHdrs = [
+    {label:rng+'<br>Actuals',        cls:'col-act'    },
+    {label:rng+'<br>w/ Passthrough', cls:'col-pt'     },
+    {label:rng+'<br>AOP',            cls:'col-aop'    },
+    {label:qLbl+'<br>Actuals',       cls:'col-qtd'    },
+    {label:qLbl+'<br>w/ Passthrough',cls:'col-qtd-pt' },
+    {label:qLbl+'<br>AOP',           cls:'col-qtd-aop'},
+    {label:(pm[0] ? pm[0].label : '&ndash;')+'<br>Actuals', cls:'col-prevmon'},
+    {label:(pm[1] ? pm[1].label : '&ndash;')+'<br>Actuals', cls:'col-prevmon'},
+    {label:'Prev Qtr<br>Actuals',    cls:'col-prev'   }
+  ];
+  var html = '<thead><tr><th class="col-hdr col-hdr-label">Philippines Insurance</th>';
+  colHdrs.forEach(function(c) {
+    html += '<th class="col-hdr '+c.cls+'">'+c.label+'</th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  PH_CHANNELS.forEach(function(ch) {
+    html += chHeaderHtml('PH', ch, 10, PH_CHANNELS);
+    var act   = getC(d.rangeActuals,   ch.key);
+    var qtd   = getC(d.qtdActuals,     ch.key);
+    var maop  = getC(d.aopRange,       ch.key);
+    var qaop  = getC(d.aopQTD,        ch.key);
+    var prev  = hasPrev ? getC(d.prevQtrActuals, ch.key) : null;
+    var pm0   = pm[0] ? getC(pm[0].data, ch.key) : null;
+    var pm1   = pm[1] ? getC(pm[1].data, ch.key) : null;
+    var isUC  = ch.key === 'UC Attached';
+
+    var ptD    = ptChannelDelta(ch.key, 'PH', start, end);
+    var actPT  = addPT(act, ptD);
+    var qtdPT  = addPT(qtd, ptD);
+
+    PH_ROWS.forEach(function(row) {
+      var aVal    = pctOrVal(row.key, act);
+      var ptVal   = pctOrVal(row.key, actPT);
+      var aoVal   = isUC ? null : pctOrVal(row.key, maop);
+      var qVal    = pctOrVal(row.key, qtd);
+      var qPtVal  = pctOrVal(row.key, qtdPT);
+      var qaoVal  = isUC ? null : pctOrVal(row.key, qaop);
+      var pm0Val  = pm0 ? pctOrVal(row.key, pm0) : null;
+      var pm1Val  = pm1 ? pctOrVal(row.key, pm1) : null;
+      var pvVal   = prev  ? pctOrVal(row.key, prev) : null;
+
+      html += rowTrOpenHtml('PH', ch, row, PH_CHANNELS)
+        +rowLabelCellHtml('PH', ch.key, row, ch.depth)
+        +'<td class="col-act">'    +fmt(aVal,   row.fmt)+'</td>'
+        +'<td class="col-pt">'     +fmt(ptVal,  row.fmt)+'</td>'
+        +'<td class="col-aop">'    +fmt(aoVal,  row.fmt)+'</td>'
+        +'<td class="col-qtd">'    +fmt(qVal,   row.fmt)+'</td>'
+        +'<td class="col-qtd-pt">' +fmt(qPtVal, row.fmt)+'</td>'
+        +'<td class="col-qtd-aop">'+fmt(qaoVal, row.fmt)+'</td>'
+        +'<td class="col-prevmon">'+fmt(pm0Val, row.fmt)+'</td>'
+        +'<td class="col-prevmon">'+fmt(pm1Val, row.fmt)+'</td>'
+        +'<td class="col-prev">'   +fmt(pvVal,  row.fmt)+'</td>'
+        +'</tr>';
+    });
+  });
+  html += '</tbody>';
+
+  document.getElementById('table-PH').innerHTML = html;
+  if (isFrozen) document.getElementById('wrap-PH').classList.add('frozen-overlay');
+  else          document.getElementById('wrap-PH').classList.remove('frozen-overlay');
+
+  renderPTPanel(start, end);
+
+  var ptOn   = ptHasData('PH', start, end);
+  var ptNote = ptOn
+    ? 'Passthrough = base actuals + manual B2B/Agency split (With-GM Rev/GM = 5% of With-GM NP)'
+    : 'Passthrough = Actuals (enter B2B/Agency split in the panel above, then Submit)';
+  var qtdLbl = d.qtdRange ? fmtDate(d.qtdRange.start) + ' – ' + fmtDate(end) : fmtDate(start) + ' – ' + fmtDate(end);
+  var pvNote = hasPrev && d.prevRange
+    ? 'Prev Qtr (Insurance Actuals): ' + (d.prevRange.label || (fmtDate(d.prevRange.start) + ' – ' + fmtDate(d.prevRange.end)))
+    : 'Prev Qtr: not available for this period';
+  document.getElementById('fn-PH').innerHTML =
+    '<strong>Notes:</strong> &nbsp;* Raw USD (PHP &divide; 60) &nbsp;|&nbsp;'
+    +'Date range: '+fmtDate(start)+' &ndash; '+fmtDate(end)+' &nbsp;|&nbsp;'
+    +'AOP source: PH-AOP27 &nbsp;|&nbsp;QTD range: '+qtdLbl+' &nbsp;|&nbsp;'
+    +ptNote+' &nbsp;|&nbsp;'
+    +'B2C Subtotal = B2C + Renewal &nbsp;|&nbsp;'
+    +'B2B2C = UC Attached + B2B &amp; Affiliates + Agency &nbsp;|&nbsp;'+pvNote;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 7c — SEA TOTAL TAB (derived, client-side only)
+//  Combines already-loaded PH + INDO cache into one channel-
+//  wise view. No server call of its own — read-only, no
+//  freeze/encode/flash/passthrough (those are per-country).
+// ═══════════════════════════════════════════════════════════
+
+// SEA channel → which PH channel key + which INDO channel key feed it.
+// null means that country contributes nothing to this SEA channel.
+// These 6 are the actual merge sources (ph/indo keys matter here); the
+// two subtotal groupings and the grand total are visual/collapse parents
+// layered on top — see SEA_SUBTOTAL_GROUPS and buildSEAChannelList().
+var SEA_CHANNEL_MAP = [
+  { key:'B2C',     label:'B2C',          cls:'ch-pink', ph:'B2C',              indo:'Tele-Sales', depth:1, parent:'B2C Subtotal' },
+  { key:'Renewal', label:'Renewal',      cls:'ch-blue', ph:'Renewal',          indo:null,          depth:1, parent:'B2C Subtotal' },
+  { key:'Branch',  label:'Branch',       cls:'ch-pink', ph:'Branch',           indo:null,          depth:1, parent:'B2B2C Subtotal' },
+  { key:'UC Attached', label:'UC Attached', cls:'ch-blue', ph:'UC Attached',   indo:'Dealer',      depth:1, parent:'B2B2C Subtotal' },
+  { key:'B2B',     label:'B2B',          cls:'ch-pink', ph:'B2B & Affiliates', indo:'B2B/SAU',     depth:1, parent:'B2B2C Subtotal' },
+  { key:'Agency',  label:'Agency',       cls:'ch-blue', ph:'Agency',           indo:'Agency',      depth:1, parent:'B2B2C Subtotal' }
+];
+
+// Add two {nops,np,rev,gm} channel objects; null/missing treated as 0.
+// Passing null for either side is safe (e.g. INDO side is null for
+// Renewal/Branch/UC Attached — PH-only channels).
+function addChObj(a, b) {
+  a = a || {}; b = b || {};
+  return {
+    nops: (a.nops || 0) + (b.nops || 0),
+    np:   (a.np   || 0) + (b.np   || 0),
+    rev:  (a.rev  || 0) + (b.rev  || 0),
+    gm:   (a.gm   || 0) + (b.gm   || 0)
+  };
+}
+
+// SEA subtotal groupings (visual/collapse parents only — NOT merge
+// sources). Computed from the already-merged leaf channels below, the
+// same way addSubtotals_PH() does it server-side for PH.
+var SEA_SUBTOTAL_GROUPS = {
+  'B2C Subtotal':   ['B2C', 'Renewal'],
+  'B2B2C Subtotal': ['Branch', 'UC Attached', 'B2B', 'Agency']
+};
+
+// Passthrough delta for ANY SEA row — leaf channel, subtotal, or the grand
+// total. Leaf channels look up their own PH source key directly (same as
+// before). Subtotal/grand-total rows have no single PH source key of their
+// own (they're synthetic groupings), so their delta is the SUM of whichever
+// of their descendant leaf channels carry real PH passthrough — currently
+// only Agency and B2B — found by walking SEA_SUBTOTAL_GROUPS. This is the
+// SEA-side equivalent of how ptChannelDelta() itself sums Agency+B2B for
+// PH's own 'B2B2C Subtotal' / 'Philippines Insurance' rows.
+function seaPtDelta(chKey, start, end) {
+  var zero = {nops:0,np:0,rev:0,gm:0};
+  var byKey = {};
+  SEA_CHANNEL_MAP.forEach(function(c) { byKey[c.key] = c; });
+
+  // Leaf channel: use its own PH source key, same as any other leaf.
+  if (byKey[chKey]) {
+    var phKey = byKey[chKey].ph || null;
+    return phKey ? ptChannelDelta(phKey, 'PH', start, end) : zero;
+  }
+
+  // Subtotal or grand total: sum the deltas of every descendant leaf.
+  var leafKeys;
+  if (chKey === 'SEA Insurance Total') {
+    leafKeys = SEA_CHANNEL_MAP.map(function(c) { return c.key; });
+  } else if (SEA_SUBTOTAL_GROUPS[chKey]) {
+    leafKeys = SEA_SUBTOTAL_GROUPS[chKey];
+  } else {
+    return zero;
+  }
+  var total = zero;
+  leafKeys.forEach(function(leafKey) {
+    var leaf = byKey[leafKey];
+    var phKey = leaf ? (leaf.ph || null) : null;
+    var d = phKey ? ptChannelDelta(phKey, 'PH', start, end) : zero;
+    total = addPT(total, d);
+  });
+  return total;
+}
+
+// Full ordered channel list for rendering/export: B2C Subtotal (parent) →
+// [B2C, Renewal] → B2B2C Subtotal (parent) → [Branch, UC Attached, B2B,
+// Agency] → SEA Insurance Total (static, always last). Built once from
+// SEA_CHANNEL_MAP so the two subtotal parent headers are inserted at the
+// right position without duplicating the ordering logic at each call site.
+function buildSEAChannelList() {
+  var b2cGroup   = SEA_CHANNEL_MAP.filter(function(c) { return c.parent === 'B2C Subtotal'; });
+  var b2b2cGroup = SEA_CHANNEL_MAP.filter(function(c) { return c.parent === 'B2B2C Subtotal'; });
+  return [
+    { key:'B2C Subtotal', label:'B2C Subtotal', cls:'ch-grey', depth:0, parent:null }
+  ].concat(b2cGroup, [
+    { key:'B2B2C Subtotal', label:'B2B2C Subtotal', cls:'ch-grey', depth:0, parent:null }
+  ], b2b2cGroup, [
+    { key:'SEA Insurance Total', label:'SEA Insurance Total', cls:'ch-navy', depth:0, parent:null, static:true }
+  ]);
+}
+
+// Merge one data field (e.g. rangeActuals, aopRange, qtdActuals...) from
+// PH + INDO into a single { channels: {...} } object keyed by SEA channel,
+// following SEA_CHANNEL_MAP. Also adds the two subtotal groupings and a
+// 'SEA Insurance Total' roll-up summing all 6 leaf SEA channels.
+function mergeSEAField(phField, indoField) {
+  var channels = {};
+  SEA_CHANNEL_MAP.forEach(function(ch) {
+    var phCh   = ch.ph   ? getC(phField,   ch.ph)   : {};
+    var indoCh = ch.indo ? getC(indoField, ch.indo) : {};
+    channels[ch.key] = addChObj(phCh, indoCh);
+  });
+  Object.keys(SEA_SUBTOTAL_GROUPS).forEach(function(subKey) {
+    var sum = { nops:0, np:0, rev:0, gm:0 };
+    SEA_SUBTOTAL_GROUPS[subKey].forEach(function(leafKey) {
+      sum = addChObj(sum, channels[leafKey]);
+    });
+    channels[subKey] = sum;
+  });
+  var total = { nops:0, np:0, rev:0, gm:0 };
+  SEA_CHANNEL_MAP.forEach(function(ch) { total = addChObj(total, channels[ch.key]); });
+  channels['SEA Insurance Total'] = total;
+  return { channels: channels };
+}
+
+// Merge priorMonths arrays (each entry is {label, data:{channels:{...}}}).
+// PH and INDO priorMonths always have matching labels/lengths (both derived
+// from the same QUARTERS table in loadCountry), so they're merged pairwise
+// by index.
+function mergeSEAPriorMonths(phPM, indoPM) {
+  phPM = phPM || []; indoPM = indoPM || [];
+  var len = Math.max(phPM.length, indoPM.length);
+  var out = [];
+  for (var i = 0; i < len; i++) {
+    var phEntry   = phPM[i];
+    var indoEntry = indoPM[i];
+    var label = (phEntry && phEntry.label) || (indoEntry && indoEntry.label) || '';
+    out.push({
+      label: label,
+      data:  mergeSEAField(phEntry ? phEntry.data : null, indoEntry ? indoEntry.data : null)
+    });
+  }
+  return out;
+}
+
+// Build the full SEA "d" object, shaped exactly like the PH loadCountry()
+// result, from whatever PH + INDO data is currently cached for the active
+// date range. Returns null if either country hasn't loaded yet.
+function buildSEAData(start, end) {
+  var phD   = dataCache['PH:'   + start + ':' + end];
+  var indoD = dataCache['INDO:' + start + ':' + end];
+  if (!phD || !indoD) return null;
+
+  return {
+    rangeActuals:   mergeSEAField(phD.rangeActuals,   indoD.rangeActuals),
+    qtdActuals:     mergeSEAField(phD.qtdActuals,     indoD.qtdActuals),
+    prevQtrActuals: (phD.prevQtrActuals || indoD.prevQtrActuals)
+                      ? mergeSEAField(phD.prevQtrActuals, indoD.prevQtrActuals)
+                      : null,
+    aopRange:       mergeSEAField(phD.aopRange, indoD.aopRange),
+    aopQTD:         mergeSEAField(phD.aopQTD,   indoD.aopQTD),
+    priorMonths:    mergeSEAPriorMonths(phD.priorMonths, indoD.priorMonths),
+    qtdRange:       phD.qtdRange,
+    prevRange:      phD.prevRange,
+    ts:             new Date().toISOString()
+  };
+}
+
+// Orchestrates the SEA tab: ensures PH + INDO are loaded (kicking off a
+// load if either is missing, since a fresh page load may land on SEA
+// before loadAll()'s two fetches resolve), then renders.
+async function renderSEATab() {
+  showLoading('SEA', true);
+  var start = activeStart, end = activeEnd;
+
+  var phKey   = 'PH:'   + start + ':' + end;
+  var indoKey = 'INDO:' + start + ':' + end;
+
+  try {
+    var waits = [];
+    if (!dataCache[phKey])   waits.push(loadCountry('PH',   start, end, false));
+    if (!dataCache[indoKey]) waits.push(loadCountry('INDO', start, end, false));
+    if (waits.length) await Promise.all(waits);
+
+    var seaData = buildSEAData(start, end);
+    if (!seaData) throw new Error('Philippines / Indonesia data not available');
+
+    renderSEA(seaData, start, end);
+    showLoading('SEA', false);
+  } catch (err) {
+    showLoading('SEA', false);
+    document.getElementById('content-SEA').innerHTML =
+      '<div style="padding:20px;color:#c62828">&#9888; Could not build SEA total: '
+      + err.message + '</div>';
+    document.getElementById('content-SEA').style.display = 'block';
+  }
+}
+
+// Renders the combined SEA table — same 9-column layout as PH (Actuals,
+// w/ Passthrough, AOP, QTD, QTD w/ Passthrough, QTD AOP, 2 prior months,
+// Prev Qtr), but w/ Passthrough columns use PH's real passthrough delta
+// plus INDO's actuals as-is (INDO has no passthrough concept of its own).
+function renderSEA(d, start, end) {
+  var rng     = rangeLabel(start, end);
+  var lastM   = isoToMonthStr(start);
+  var qLbl    = QUARTER_LABELS[lastM] || 'QTD';
+  var hasPrev = !!d.prevQtrActuals;
+
+  var pm = (d.priorMonths || []).slice(0, 2);
+  while (pm.length < 2) pm.push(null);
+
+  var colHdrs = [
+    {label:rng+'<br>Actuals',        cls:'col-act'    },
+    {label:rng+'<br>w/ Passthrough', cls:'col-pt'     },
+    {label:rng+'<br>AOP',            cls:'col-aop'    },
+    {label:qLbl+'<br>Actuals',       cls:'col-qtd'    },
+    {label:qLbl+'<br>w/ Passthrough',cls:'col-qtd-pt' },
+    {label:qLbl+'<br>AOP',           cls:'col-qtd-aop'},
+    {label:(pm[0] ? pm[0].label : '&ndash;')+'<br>Actuals', cls:'col-prevmon'},
+    {label:(pm[1] ? pm[1].label : '&ndash;')+'<br>Actuals', cls:'col-prevmon'},
+    {label:'Prev Qtr<br>Actuals',    cls:'col-prev'   }
+  ];
+  var html = '<thead><tr><th class="col-hdr col-hdr-label">SEA Insurance (PH + INDO)</th>';
+  colHdrs.forEach(function(c) {
+    html += '<th class="col-hdr '+c.cls+'">'+c.label+'</th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  var seaChannels = buildSEAChannelList();
+
+  seaChannels.forEach(function(ch) {
+    html += chHeaderHtml('SEA', ch, 10, seaChannels);
+    var act  = getC(d.rangeActuals,   ch.key);
+    var qtd  = getC(d.qtdActuals,     ch.key);
+    var maop = getC(d.aopRange,       ch.key);
+    var qaop = getC(d.aopQTD,        ch.key);
+    var prev = hasPrev ? getC(d.prevQtrActuals, ch.key) : null;
+    var pm0  = pm[0] ? getC(pm[0].data, ch.key) : null;
+    var pm1  = pm[1] ? getC(pm[1].data, ch.key) : null;
+
+    // Passthrough: leaf channels use their own PH delta; subtotal and
+    // grand-total rows sum the deltas of their descendant leaf channels
+    // (seaPtDelta handles both cases) — INDO contributes actuals as-is
+    // (no PT of its own) either way.
+    var ptD     = seaPtDelta(ch.key, start, end);
+    var actPT   = addPT(act, ptD);
+    var qtdPT   = addPT(qtd, ptD);
+
+    PH_ROWS.forEach(function(row) {
+      var aVal    = pctOrVal(row.key, act);
+      var ptVal   = pctOrVal(row.key, actPT);
+      var aoVal   = pctOrVal(row.key, maop);
+      var qVal    = pctOrVal(row.key, qtd);
+      var qPtVal  = pctOrVal(row.key, qtdPT);
+      var qaoVal  = pctOrVal(row.key, qaop);
+      var pm0Val  = pm0 ? pctOrVal(row.key, pm0) : null;
+      var pm1Val  = pm1 ? pctOrVal(row.key, pm1) : null;
+      var pvVal   = prev ? pctOrVal(row.key, prev) : null;
+
+      html += rowTrOpenHtml('SEA', ch, row, seaChannels)
+        +rowLabelCellHtml('SEA', ch.key, row, ch.depth)
+        +'<td class="col-act">'    +fmt(aVal,   row.fmt)+'</td>'
+        +'<td class="col-pt">'     +fmt(ptVal,  row.fmt)+'</td>'
+        +'<td class="col-aop">'    +fmt(aoVal,  row.fmt)+'</td>'
+        +'<td class="col-qtd">'    +fmt(qVal,   row.fmt)+'</td>'
+        +'<td class="col-qtd-pt">' +fmt(qPtVal, row.fmt)+'</td>'
+        +'<td class="col-qtd-aop">'+fmt(qaoVal, row.fmt)+'</td>'
+        +'<td class="col-prevmon">'+fmt(pm0Val, row.fmt)+'</td>'
+        +'<td class="col-prevmon">'+fmt(pm1Val, row.fmt)+'</td>'
+        +'<td class="col-prev">'   +fmt(pvVal,  row.fmt)+'</td>'
+        +'</tr>';
+    });
+  });
+  html += '</tbody>';
+
+  document.getElementById('table-SEA').innerHTML = html;
+  document.getElementById('content-SEA').style.display = 'block';
+
+  var qtdLbl = d.qtdRange ? fmtDate(d.qtdRange.start) + ' – ' + fmtDate(end) : fmtDate(start) + ' – ' + fmtDate(end);
+  var pvNote = hasPrev && d.prevRange
+    ? 'Prev Qtr (Insurance Actuals): ' + (d.prevRange.label || (fmtDate(d.prevRange.start) + ' – ' + fmtDate(d.prevRange.end)))
+    : 'Prev Qtr: not available for this period';
+  document.getElementById('fn-SEA').innerHTML =
+    '<strong>Notes:</strong> &nbsp;* Raw USD (PH: PHP &divide; 60, INDO: IDR &divide; 16,200) &nbsp;|&nbsp;'
+    +'Date range: '+fmtDate(start)+' &ndash; '+fmtDate(end)+' &nbsp;|&nbsp;QTD range: '+qtdLbl+' &nbsp;|&nbsp;'
+    +'B2C = PH B2C + INDO Tele-Sales &nbsp;|&nbsp;'
+    +'Renewal / Branch = PH only &nbsp;|&nbsp;'
+    +'UC Attached = PH UC Attached + INDO Dealer &nbsp;|&nbsp;'
+    +'B2B = PH B2B &amp; Affiliates + INDO B2B/SAU &nbsp;|&nbsp;'
+    +'Agency = PH Agency + INDO Agency &nbsp;|&nbsp;'
+    +'w/ Passthrough = PH passthrough delta (Agency/B2B) + INDO actuals as-is &nbsp;|&nbsp;'
+    +'Read-only combined view — Freeze/Encode/Flash are per-country &nbsp;|&nbsp;'+pvNote;
+}
+
+var INDO_CHANNELS = [
+  {key:'Tele-Sales',           label:'Tele-Sales',              cls:'ch-pink', depth:0, parent:null},
+  {key:'B2B2C Subtotal',       label:'B2B2C Subtotal',          cls:'ch-grey', depth:0, parent:null},
+  {key:'Agency',               label:'Agency',                  cls:'ch-blue', depth:1, parent:'B2B2C Subtotal'},
+  {key:'Dealer',               label:'Dealer',                  cls:'ch-pink', depth:1, parent:'B2B2C Subtotal'},
+  {key:'B2B/SAU',              label:'B2B / SAU',               cls:'ch-blue', depth:1, parent:'B2B2C Subtotal'},
+  {key:'INDO Insurance Total', label:'Indonesia Insurance Total',cls:'ch-navy', depth:0, parent:null, static:true}
+];
+var INDO_ROWS = [
+  {key:'nops',  label:'Issued NOPs',          fmt:'int', pct:false},
+  {key:'np',    label:'Net Premium* (USD)',    fmt:'num', pct:false},
+  {key:'rev',   label:'Revenue* (USD)',        fmt:'num', pct:false},
+  {key:'revpct',label:'Rev %',                fmt:'pct', pct:true },
+  {key:'gm',    label:'Gross Margin* (USD)',  fmt:'num', pct:false},
+  {key:'gmpct', label:'GM %',                 fmt:'pct', pct:true }
+];
+
+function renderINDO(d, start, end) {
+  var rng      = rangeLabel(start, end);
+  var lastM    = isoToMonthStr(start);
+  var qLbl     = QUARTER_LABELS[lastM] || 'QTD';
+  var hasPrev  = !!d.prevQtrActuals;
+  var isFrozen = getState('INDO', start, end) === 'FROZEN';
+
+  // Two prior-month columns (closed months of the current quarter, from
+  // Insurance Actuals) — same source/logic as PH.
+  var pm = (d.priorMonths || []).slice(0, 2);
+  while (pm.length < 2) pm.push(null);
+
+  var colHdrs = [
+    {label:rng+'<br>Actuals', cls:'col-ind-act' },
+    {label:rng+'<br>AOP',     cls:'col-ind-aop' },
+    {label:qLbl+'<br>Actuals',cls:'col-ind-qtd' },
+    {label:qLbl+'<br>AOP',    cls:'col-ind-qaop'},
+    {label:(pm[0] ? pm[0].label : '&ndash;')+'<br>Actuals', cls:'col-ind-prevmon'},
+    {label:(pm[1] ? pm[1].label : '&ndash;')+'<br>Actuals', cls:'col-ind-prevmon'},
+    {label:'Prev Qtr<br>Actuals',cls:'col-ind-prev'}
+  ];
+  var html = '<thead><tr><th class="col-hdr col-hdr-label">Indonesia Insurance</th>';
+  colHdrs.forEach(function(c) {
+    html += '<th class="col-hdr '+c.cls+'">'+c.label+'</th>';
+  });
+  html += '</tr></thead><tbody>';
+
+  INDO_CHANNELS.forEach(function(ch) {
+    html += chHeaderHtml('INDO', ch, 8, INDO_CHANNELS);
+    var act  = getC(d.rangeActuals,   ch.key);
+    var qtd  = getC(d.qtdActuals,     ch.key);
+    var maop = getC(d.aopRange,       ch.key);
+    var qaop = getC(d.aopQTD,        ch.key);
+    var prev = hasPrev ? getC(d.prevQtrActuals, ch.key) : null;
+    var pm0  = pm[0] ? getC(pm[0].data, ch.key) : null;
+    var pm1  = pm[1] ? getC(pm[1].data, ch.key) : null;
+    var isDlr = ch.key === 'Dealer';
+
+    INDO_ROWS.forEach(function(row) {
+      var aVal   = pctOrVal(row.key, act);
+      var aoVal  = isDlr ? null : pctOrVal(row.key, maop);
+      var qVal   = pctOrVal(row.key, qtd);
+      var qaoVal = isDlr ? null : pctOrVal(row.key, qaop);
+      var pm0Val = pm0 ? pctOrVal(row.key, pm0) : null;
+      var pm1Val = pm1 ? pctOrVal(row.key, pm1) : null;
+      var pvVal  = prev ? pctOrVal(row.key, prev) : null;
+
+      html += rowTrOpenHtml('INDO', ch, row, INDO_CHANNELS)
+        +rowLabelCellHtml('INDO', ch.key, row, ch.depth)
+        +'<td class="col-ind-act">'  +fmt(aVal,   row.fmt)+'</td>'
+        +'<td class="col-ind-aop">'  +fmt(aoVal,  row.fmt)+'</td>'
+        +'<td class="col-ind-qtd">'  +fmt(qVal,   row.fmt)+'</td>'
+        +'<td class="col-ind-qaop">'+fmt(qaoVal, row.fmt)+'</td>'
+        +'<td class="col-ind-prevmon">'+fmt(pm0Val, row.fmt)+'</td>'
+        +'<td class="col-ind-prevmon">'+fmt(pm1Val, row.fmt)+'</td>'
+        +'<td class="col-ind-prev">' +fmt(pvVal,  row.fmt)+'</td>'
+        +'</tr>';
+    });
+  });
+  html += '</tbody>';
+
+  document.getElementById('table-INDO').innerHTML = html;
+  if (isFrozen) document.getElementById('wrap-INDO').classList.add('frozen-overlay');
+  else          document.getElementById('wrap-INDO').classList.remove('frozen-overlay');
+
+  var qtdLbl = d.qtdRange ? fmtDate(d.qtdRange.start) + ' – ' + fmtDate(end) : fmtDate(start) + ' – ' + fmtDate(end);
+  var pvNote = hasPrev && d.prevRange
+    ? 'Prev Qtr (Insurance Actuals): ' + (d.prevRange.label || (fmtDate(d.prevRange.start) + ' – ' + fmtDate(d.prevRange.end)))
+    : 'Prev Qtr: not available for this period';
+  document.getElementById('fn-INDO').innerHTML =
+    '<strong>Notes:</strong> &nbsp;* Raw USD (IDR &divide; 16,200) &nbsp;|&nbsp;'
+    +'Date range: '+fmtDate(start)+' &ndash; '+fmtDate(end)+' &nbsp;|&nbsp;'
+    +'AOP source: INDO-AOP27 &nbsp;|&nbsp;QTD range: '+qtdLbl+' &nbsp;|&nbsp;'
+    +'Dealer: no AOP target &nbsp;|&nbsp;'
+    +'B2B2C = Agency + Dealer + B2B/SAU &nbsp;|&nbsp;'+pvNote;
+}
+
+function getC(obj, key) {
+  return (obj && obj.channels && obj.channels[key]) ? obj.channels[key] : {};
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 7b — PASSTHROUGH ENTRY PANEL
+// ═══════════════════════════════════════════════════════════
+
+function ptNum(v){ var n = parseFloat(String(v).replace(/,/g,'').trim()); return isNaN(n)?0:n; }
+function ptFmtInt(v){ return Math.round(v).toLocaleString(); }
+function ptFmtMoney(v){ return '$' + Math.round(v).toLocaleString(); }
+
+function renderPTPanel(start, end) {
+  var host = document.getElementById('pt-PH');
+  if (!host) return;
+  var inp     = loadPTInputs('PH', start, end) || ptEmpty();
+  var frozen  = getState('PH', start, end) === 'FROZEN';
+  var collapsed = host.querySelector('.pt-panel') &&
+                  host.querySelector('.pt-panel').classList.contains('collapsed');
+  var dis = frozen ? 'disabled' : '';
+
+  function cellIn(id, val){
+    return '<td><input class="pt-in" id="'+id+'" type="number" step="any" '
+      + 'value="'+(val||0)+'" oninput="recalcPT()" '+dis+'></td>';
+  }
+  function cellAuto(id, cls){ return '<td class="'+(cls||'pt-auto')+'" id="'+id+'">–</td>'; }
+
+  var rng = rangeLabel(start, end);
+  var h = ''
+   + '<div class="pt-panel'+(collapsed?' collapsed':'')+(frozen?' frozen':'')+'" id="ptPanel">'
+   +   '<div class="pt-head" onclick="togglePTPanel()">'
+   +     '<h3><span class="pt-chevron">&#9660;</span>&#128228; Passthrough Data &mdash; Manual Entry ('+rng+')</h3>'
+   +     '<span class="pt-pool"><span class="pt-locked-msg">&#128274; Frozen &mdash; unfreeze to edit</span> '
+   +        'Pool NP&nbsp;<b id="ptPoolNp">$0</b> &nbsp;&middot;&nbsp; Without-GM NP&nbsp;<b id="ptOoNp">$0</b></span>'
+   +   '</div>'
+   +   '<div class="pt-body">'
+   +     '<table class="pt-grid">'
+   +       '<thead><tr><th style="text-align:left">Channel / Metric</th>'
+   +         '<th>Total</th><th>With GM</th><th>Without GM</th></tr></thead>'
+   +       '<tbody>'
+   +       '<tr><td class="pt-ch" colspan="4">Agency</td></tr>'
+   +       '<tr><td class="pt-lbl">NOPs Passthrough</td>'        + cellAuto('agNopsT','pt-total') + cellIn('agNopsG',inp.agNopsG) + cellIn('agNopsH',inp.agNopsH) + '</tr>'
+   +       '<tr><td class="pt-lbl">Net Premium Passthrough</td>' + cellAuto('agNpT','pt-total')   + cellIn('agNpG',inp.agNpG)     + cellIn('agNpH',inp.agNpH)     + '</tr>'
+   +       '<tr><td class="pt-lbl">Revenue Passthrough <span style="color:#999">(NP&times;5%)</span></td>' + cellAuto('agRevT','pt-total') + cellAuto('agRevG') + cellAuto('agRevH') + '</tr>'
+   +       '<tr><td class="pt-lbl">GM Passthrough <span style="color:#999">(NP&times;5%)</span></td>'      + cellAuto('agGmT','pt-total')  + cellAuto('agGmG')  + cellAuto('agGmH')  + '</tr>'
+   +       '<tr><td class="pt-ch" colspan="4">B2B &amp; Affiliates</td></tr>'
+   +       '<tr><td class="pt-lbl">NOPs Passthrough</td>'        + cellAuto('b2bNopsT','pt-total') + cellIn('b2bNopsG',inp.b2bNopsG) + cellIn('b2bNopsH',inp.b2bNopsH) + '</tr>'
+   +       '<tr><td class="pt-lbl">Net Premium Passthrough</td>' + cellAuto('b2bNpT','pt-total')   + cellIn('b2bNpG',inp.b2bNpG)     + cellIn('b2bNpH',inp.b2bNpH)     + '</tr>'
+   +       '<tr><td class="pt-lbl">Revenue Passthrough <span style="color:#999">(NP&times;5%)</span></td>' + cellAuto('b2bRevT','pt-total') + cellAuto('b2bRevG') + cellAuto('b2bRevH') + '</tr>'
+   +       '<tr><td class="pt-lbl">GM Passthrough <span style="color:#999">(NP&times;5%)</span></td>'      + cellAuto('b2bGmT','pt-total')  + cellAuto('b2bGmG')  + cellAuto('b2bGmH')  + '</tr>'
+   +       '</tbody></table>'
+   +     '<div class="pt-foot">'
+   +       '<button class="pt-btn pt-btn-submit" id="ptSubmit" onclick="submitPassthrough()" '+dis+'>&#10003; Submit &amp; Update Dashboard</button>'
+   +       '<button class="pt-btn pt-btn-clear" id="ptClear" onclick="clearPassthrough()" '+dis+'>Clear</button>'
+   +       '<span class="pt-check">Pool Net Premium (Agency + B2B): <b id="ptCheckPool">$0</b></span>'
+   +     '</div>'
+   +     '<div class="pt-note">Enter the <b>With GM</b> and <b>Without GM</b> split for NOPs and Net Premium per channel, '
+   +       'in <b>raw USD</b> (e.g. 238,441). '
+   +       'Revenue and GM auto-fill at 5% of the With-GM Net Premium; Without-GM earns 0. '
+   +       'On Submit, the B2B &amp; Affiliates and Agency <b>w/ Passthrough</b> columns update to base actuals + passthrough total. '
+   +       'Values are saved for this date range.</div>'
+   +   '</div>'
+   + '</div>';
+
+  host.innerHTML = h;
+  recalcPT();
+}
+
+function togglePTPanel(){
+  var p = document.getElementById('ptPanel');
+  if (p) p.classList.toggle('collapsed');
+}
+
+function readPTInputs(){
+  if (!document.getElementById('agNpG')) return null;
+  function v(id){ return ptNum(document.getElementById(id).value); }
+  return {
+    agNopsG:v('agNopsG'), agNopsH:v('agNopsH'), agNpG:v('agNpG'), agNpH:v('agNpH'),
+    b2bNopsG:v('b2bNopsG'), b2bNopsH:v('b2bNopsH'), b2bNpG:v('b2bNpG'), b2bNpH:v('b2bNpH')
+  };
+}
+
+function recalcPT(){
+  var inp = readPTInputs();
+  if (!inp) return;
+  function set(id, txt){ var el=document.getElementById(id); if(el) el.textContent = txt; }
+
+  var agRevG = inp.agNpG * PT_RATE, agGmG = inp.agNpG * PT_RATE;
+  set('agNopsT', ptFmtInt(inp.agNopsG + inp.agNopsH));
+  set('agNpT',   ptFmtMoney(inp.agNpG + inp.agNpH));
+  set('agRevG', ptFmtMoney(agRevG)); set('agRevH', ptFmtMoney(0)); set('agRevT', ptFmtMoney(agRevG));
+  set('agGmG',  ptFmtMoney(agGmG));  set('agGmH',  ptFmtMoney(0)); set('agGmT',  ptFmtMoney(agGmG));
+
+  var b2bRevG = inp.b2bNpG * PT_RATE, b2bGmG = inp.b2bNpG * PT_RATE;
+  set('b2bNopsT', ptFmtInt(inp.b2bNopsG + inp.b2bNopsH));
+  set('b2bNpT',   ptFmtMoney(inp.b2bNpG + inp.b2bNpH));
+  set('b2bRevG', ptFmtMoney(b2bRevG)); set('b2bRevH', ptFmtMoney(0)); set('b2bRevT', ptFmtMoney(b2bRevG));
+  set('b2bGmG',  ptFmtMoney(b2bGmG));  set('b2bGmH',  ptFmtMoney(0)); set('b2bGmT',  ptFmtMoney(b2bGmG));
+
+  var poolNp = (inp.agNpG + inp.agNpH) + (inp.b2bNpG + inp.b2bNpH);
+  var ooNp   = inp.agNpH + inp.b2bNpH;
+  set('ptPoolNp', ptFmtMoney(poolNp));
+  set('ptOoNp',   ptFmtMoney(ooNp));
+  set('ptCheckPool', ptFmtMoney(poolNp));
+}
+
+function submitPassthrough(){
+  var s = activeStart, e = activeEnd;
+  if (getState('PH', s, e) === 'FROZEN') {
+    showToast('Range is frozen — unfreeze to edit passthrough', 'err');
+    return;
+  }
+  var inp = readPTInputs();
+  if (!inp) { showToast('Passthrough panel not ready', 'err'); return; }
+  savePTInputs('PH', s, e, inp);
+
+  var key = 'PH:' + s + ':' + e;
+  if (dataCache[key]) renderTable('PH', dataCache[key], s, e);
+  showToast('Passthrough applied to B2B & Agency \u2713', 'ok');
+}
+
+function clearPassthrough(){
+  var s = activeStart, e = activeEnd;
+  if (getState('PH', s, e) === 'FROZEN') {
+    showToast('Range is frozen — unfreeze to edit passthrough', 'err');
+    return;
+  }
+  clearPTInputs('PH', s, e);
+  var key = 'PH:' + s + ':' + e;
+  if (dataCache[key]) renderTable('PH', dataCache[key], s, e);
+  showToast('Passthrough cleared', 'info');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 8 — FORMATTERS
+// ═══════════════════════════════════════════════════════════
+
+function pctOrVal(key, obj) {
+  if (key === 'revpct') { var n=obj.np||0; return n>0 ? (obj.rev||0)/n : null; }
+  if (key === 'gmpct')  { var n=obj.np||0; return n>0 ? (obj.gm||0)/n  : null; }
+  return (obj && obj[key] != null) ? obj[key] : null;
+}
+function fmt(val, type) {
+  if (val === null || val === undefined) return dash();
+  if (type === 'int') { var n=Math.round(val); return n===0?dash():n.toLocaleString(); }
+  if (type === 'num') { if(val===0)return dash(); return val.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1}); }
+  if (type === 'pct') { if(!val)return dash(); return (val*100).toFixed(1)+'%'; }
+  return String(val);
+}
+function fmtRaw(val, type) {
+  if (val === null || val === undefined) return '–';
+  if (type === 'int') { var n=Math.round(val); return n===0?'–':n; }
+  if (type === 'num') { if(val===0)return '–'; return Math.round(val*10)/10; }
+  if (type === 'pct') { if(!val)return '–'; return (val*100).toFixed(1)+'%'; }
+  return val;
+}
+function dash() { return '<span class="dash">&ndash;</span>'; }
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 9 — CONTROLS BAR UPDATE
+// ═══════════════════════════════════════════════════════════
+
+function updateControlBar() {
+  var s = activeStart, e = activeEnd;
+  var state = getState(activeTab, s, e);
+
+  var badge = document.getElementById('statusBadge');
+  var txt   = document.getElementById('statusText');
+  badge.className = 'status-badge';
+  if      (state === 'FROZEN')  { badge.classList.add('status-frozen');  txt.textContent = 'Frozen';  }
+  else if (state === 'ENCODED') { badge.classList.add('status-encoded'); txt.textContent = 'Encoded'; }
+  else                          { badge.classList.add('status-live');    txt.textContent = 'Live';    }
+
+  var frl = document.getElementById('frozenRangeLabel');
+  if (state === 'FROZEN' || state === 'ENCODED') {
+    frl.textContent = '\uD83D\uDD12 ' + fmtDate(s) + ' – ' + fmtDate(e);
+    frl.classList.add('visible');
+  } else {
+    frl.classList.remove('visible');
+  }
+
+  var hasData = !!dataCache[activeTab + ':' + s + ':' + e];
+  var isSEA   = activeTab === 'SEA';
+  document.getElementById('btnFreeze').disabled   = isSEA || !(state === 'LIVE' && hasData);
+  document.getElementById('btnUnfreeze').disabled = isSEA || !(state === 'FROZEN');
+  document.getElementById('btnEncode').disabled   = isSEA || !(state === 'FROZEN');
+  document.getElementById('btnFlash').disabled    = isSEA || !(state === 'FROZEN');
+
+  // SEA has no freeze/encode/flash state (nothing to write back to), so
+  // hide those entirely on that tab and show a standalone Export button
+  // instead. Freeze/Unfreeze/Encode/Flash reappear on PH/INDO.
+  ['btnFreeze','btnUnfreeze','btnEncode','btnFlash'].forEach(function(id) {
+    document.getElementById(id).style.display = isSEA ? 'none' : '';
+  });
+  document.getElementById('btnExportSEA').style.display = isSEA ? '' : 'none';
+
+  var flashLink = document.getElementById('flashLink');
+  var storedUrl = localStorage.getItem('mis_flash_url_' + activeTab + '_' + s + '_' + e);
+  if (!isSEA && state === 'FROZEN' && storedUrl) {
+    flashLink.href = storedUrl;
+    flashLink.classList.add('visible');
+  } else {
+    flashLink.classList.remove('visible');
+  }
+
+  var hasNextHint = !!localStorage.getItem('mis_next_start_' + activeTab);
+  document.getElementById('btnNext').disabled = isSEA || !hasNextHint;
+  document.getElementById('btnNext').style.display = isSEA ? 'none' : '';
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 10 — FREEZE / UNFREEZE / ENCODE
+// ═══════════════════════════════════════════════════════════
+
+function doFreeze() {
+  var s = activeStart, e = activeEnd;
+  var key = activeTab + ':' + s + ':' + e;
+
+  if (!dataCache[key]) { showToast('Load data first before freezing', 'err'); return; }
+
+  setState(activeTab, s, e, 'FROZEN');
+  saveSnap(activeTab, s, e, dataCache[key]);
+
+  exportToExcel(activeTab, s, e, dataCache[key]);
+
+  var nextStart = addDays(e, 1);
+  if (nextStart <= '2027-03-31') {
+    localStorage.setItem('mis_next_start_' + activeTab, nextStart);
+  }
+
+  renderTable(activeTab, dataCache[key], s, e);
+  updateControlBar();
+  showToast(activeTab + ' ' + fmtDate(s) + ' – ' + fmtDate(e) + ' frozen & exported \u2713', 'ok');
+}
+
+// SEA export — no freeze/state machine (nothing to write back to, it's a
+// derived view). Just rebuilds the current combined dataset from whatever
+// PH + INDO have cached and exports it directly.
+function doExportSEA() {
+  var s = activeStart, e = activeEnd;
+  var seaData = buildSEAData(s, e);
+  if (!seaData) {
+    showToast('Load Philippines and Indonesia data first', 'err');
+    return;
+  }
+  exportToExcel('SEA', s, e, seaData);
+}
+
+function applyNextPeriod() {
+  var hint = localStorage.getItem('mis_next_start_' + activeTab);
+  if (!hint) { showToast('No frozen period yet — freeze a range first', 'info'); return; }
+
+  var ns = hint;
+  var ne = endOfMonth(ns);
+  if (ns > '2027-03-31') ns = '2027-03-31';
+  if (ne > '2027-03-31') ne = '2027-03-31';
+
+  document.getElementById('startDate').value = ns;
+  document.getElementById('endDate').value   = ne;
+  activeStart = ns;
+  activeEnd   = ne;
+
+  dataCache['PH:'   + ns + ':' + ne] = undefined;
+  dataCache['INDO:' + ns + ':' + ne] = undefined;
+
+  showToast('Next reporting period: ' + fmtDate(ns) + ' onward', 'info');
+  loadAll();
+}
+
+function doUnfreeze() {
+  var s = activeStart, e = activeEnd;
+
+  setState(activeTab, s, e, 'LIVE');
+  try { localStorage.removeItem(snapKey(activeTab, s, e)); } catch(ex) {}
+  dataCache[activeTab + ':' + s + ':' + e] = undefined;
+
+  updateControlBar();
+  showToast(activeTab + ' returned to Live mode', 'info');
+  loadCountry(activeTab, s, e, true);
+}
+
+function doEncode() {
+  showToast('Encode will be wired in Phase 6', 'err');
+}
+
+// ── CREATE FLASH ─────────────────────────────────────────────
+var flashBusy = false;
+async function doCreateFlash() {
+  var country = activeTab, s = activeStart, e = activeEnd;
+
+  if (getState(country, s, e) !== 'FROZEN') {
+    showToast('Freeze the period first, then create its flash file', 'err');
+    return;
+  }
+  if (flashBusy) { showToast('A flash file is already being generated…', 'info'); return; }
+
+  flashBusy = true;
+  var btn = document.getElementById('btnFlash');
+  var prevHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '\u23F3 Generating…';
+  showToast('Generating ' + country + ' flash file from live source sheets…', 'info');
+
+  try {
+    var res = await runScript('createFlash', country, s, e);
+    if (!res || !res.success) {
+      throw new Error((res && res.error) ? res.error : 'Flash generation failed');
+    }
+
+    localStorage.setItem('mis_flash_url_' + country + '_' + s + '_' + e, res.url);
+    var link = document.getElementById('flashLink');
+    link.href = res.url;
+    document.getElementById('flashLinkText').textContent = res.name || 'Open flash file';
+    link.classList.add('visible');
+
+    var det = res.counts ? ' (' + Object.keys(res.counts).map(function(k){ return k + ': ' + res.counts[k]; }).join(', ') + ')' : '';
+    showToast('Flash file created: ' + (res.name || '') + det, 'ok');
+  } catch (err) {
+    showToast('Flash generation failed: ' + err.message, 'err');
+  } finally {
+    flashBusy = false;
+    btn.innerHTML = prevHtml;
+    updateControlBar();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SECTION 11 — EXCEL EXPORT (SheetJS)
+// ═══════════════════════════════════════════════════════════
+
+function exportToExcel(country, start, end, data) {
+  try {
+    if (typeof XLSX === 'undefined') throw new Error('SheetJS not loaded');
+
+    var wb = XLSX.utils.book_new();
+
+    if (country === 'PH') {
+      var rows = buildPHRows(data, start, end);
+      var ws   = XLSX.utils.aoa_to_sheet(rows);
+      applyColWidths(ws, [22, 14, 14, 14, 14, 14, 14, 14, 14, 14]);
+      XLSX.utils.book_append_sheet(wb, ws, 'PH MIS');
+    } else if (country === 'SEA') {
+      var rows = buildSEARows(data, start, end);
+      var ws   = XLSX.utils.aoa_to_sheet(rows);
+      applyColWidths(ws, [22, 14, 14, 14, 14, 14, 14, 14, 14, 14]);
+      XLSX.utils.book_append_sheet(wb, ws, 'SEA Total');
+    } else {
+      var rows = buildINDORows(data, start, end);
+      var ws   = XLSX.utils.aoa_to_sheet(rows);
+      applyColWidths(ws, [22, 14, 14, 14, 14, 14, 14, 14]);
+      XLSX.utils.book_append_sheet(wb, ws, 'INDO MIS');
+    }
+
+    var fname = 'MIS_' + country + '_' + start + '_' + end + (country === 'SEA' ? '' : '_FROZEN') + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    showToast('Excel exported: ' + fname, 'ok');
+
+  } catch(err) {
+    exportToCSV(country, start, end, data);
+  }
+}
+
+function buildPHRows(data, start, end) {
+  var dateRangeLbl = fmtDate(start) + ' – ' + fmtDate(end);
+  var colLbl       = isoToMonthStr(start);
+  var qLbl         = QUARTER_LABELS[colLbl] || 'QTD';
+
+  var pm = (data.priorMonths || []).slice(0, 2);
+  while (pm.length < 2) pm.push(null);
+  var pm0Lbl = pm[0] ? pm[0].label : '–';
+  var pm1Lbl = pm[1] ? pm[1].label : '–';
+
+  var rows = [
+    ['SEA Insurance MIS — Philippines'],
+    ['Date Range: ' + dateRangeLbl, '', 'Frozen At: ' + new Date().toLocaleString()],
+    [],
+    ['Channel / Metric', colLbl+' Actuals', colLbl+' w/ Passthrough', colLbl+' AOP',
+     qLbl+' Actuals', qLbl+' w/ Passthrough', qLbl+' AOP',
+     pm0Lbl+' Actuals', pm1Lbl+' Actuals', 'Prev Qtr Actuals']
+  ];
+  PH_CHANNELS.forEach(function(ch) {
+    rows.push([ch.label]);
+    var act  = getC(data.rangeActuals,   ch.key);
+    var maop = getC(data.aopRange,       ch.key);
+    var qtd  = getC(data.qtdActuals,     ch.key);
+    var qaop = getC(data.aopQTD,        ch.key);
+    var prev = data.prevQtrActuals ? getC(data.prevQtrActuals, ch.key) : null;
+    var pm0  = pm[0] ? getC(pm[0].data, ch.key) : null;
+    var pm1  = pm[1] ? getC(pm[1].data, ch.key) : null;
+    var isUC = ch.key === 'UC Attached';
+
+    var ptD   = ptChannelDelta(ch.key, 'PH', start, end);
+    var actPT = addPT(act, ptD);
+    var qtdPT = addPT(qtd, ptD);
+
+    PH_ROWS.forEach(function(row) {
+      var aVal   = pctOrVal(row.key, act);
+      var ptVal  = pctOrVal(row.key, actPT);
+      var aoVal  = isUC ? null : pctOrVal(row.key, maop);
+      var qVal   = pctOrVal(row.key, qtd);
+      var qPtVal = pctOrVal(row.key, qtdPT);
+      var qaoVal = isUC ? null : pctOrVal(row.key, qaop);
+      var pm0Val = pm0 ? pctOrVal(row.key, pm0) : null;
+      var pm1Val = pm1 ? pctOrVal(row.key, pm1) : null;
+      var pvVal  = prev ? pctOrVal(row.key, prev) : null;
+      rows.push([
+        '  ' + row.label,
+        fmtRaw(aVal,   row.fmt),
+        fmtRaw(ptVal,  row.fmt),
+        fmtRaw(aoVal,  row.fmt),
+        fmtRaw(qVal,   row.fmt),
+        fmtRaw(qPtVal, row.fmt),
+        fmtRaw(qaoVal, row.fmt),
+        fmtRaw(pm0Val, row.fmt),
+        fmtRaw(pm1Val, row.fmt),
+        fmtRaw(pvVal,  row.fmt)
+      ]);
+    });
+    rows.push([]);
+  });
+  rows.push(['* Raw USD (PHP ÷ 60)  |  AOP: PH-AOP27  |  w/ Passthrough = base actuals + manual B2B/Agency split  |  B2C Subtotal = B2C + Renewal']);
+  return rows;
+}
+
+function buildSEARows(data, start, end) {
+  var dateRangeLbl = fmtDate(start) + ' – ' + fmtDate(end);
+  var colLbl       = isoToMonthStr(start);
+  var qLbl         = QUARTER_LABELS[colLbl] || 'QTD';
+
+  var pm = (data.priorMonths || []).slice(0, 2);
+  while (pm.length < 2) pm.push(null);
+  var pm0Lbl = pm[0] ? pm[0].label : '–';
+  var pm1Lbl = pm[1] ? pm[1].label : '–';
+
+  var rows = [
+    ['SEA Insurance MIS — SEA Total (PH + INDO)'],
+    ['Date Range: ' + dateRangeLbl, '', 'Exported At: ' + new Date().toLocaleString()],
+    [],
+    ['Channel / Metric', colLbl+' Actuals', colLbl+' w/ Passthrough', colLbl+' AOP',
+     qLbl+' Actuals', qLbl+' w/ Passthrough', qLbl+' AOP',
+     pm0Lbl+' Actuals', pm1Lbl+' Actuals', 'Prev Qtr Actuals']
+  ];
+
+  var seaChannels = buildSEAChannelList();
+
+  seaChannels.forEach(function(ch) {
+    rows.push([ch.label]);
+    var act  = getC(data.rangeActuals,   ch.key);
+    var maop = getC(data.aopRange,       ch.key);
+    var qtd  = getC(data.qtdActuals,     ch.key);
+    var qaop = getC(data.aopQTD,        ch.key);
+    var prev = data.prevQtrActuals ? getC(data.prevQtrActuals, ch.key) : null;
+    var pm0  = pm[0] ? getC(pm[0].data, ch.key) : null;
+    var pm1  = pm[1] ? getC(pm[1].data, ch.key) : null;
+
+    var ptD     = seaPtDelta(ch.key, start, end);
+    var actPT   = addPT(act, ptD);
+    var qtdPT   = addPT(qtd, ptD);
+
+    PH_ROWS.forEach(function(row) {
+      var aVal   = pctOrVal(row.key, act);
+      var ptVal  = pctOrVal(row.key, actPT);
+      var aoVal  = pctOrVal(row.key, maop);
+      var qVal   = pctOrVal(row.key, qtd);
+      var qPtVal = pctOrVal(row.key, qtdPT);
+      var qaoVal = pctOrVal(row.key, qaop);
+      var pm0Val = pm0 ? pctOrVal(row.key, pm0) : null;
+      var pm1Val = pm1 ? pctOrVal(row.key, pm1) : null;
+      var pvVal  = prev ? pctOrVal(row.key, prev) : null;
+      rows.push([
+        '  ' + row.label,
+        fmtRaw(aVal,   row.fmt),
+        fmtRaw(ptVal,  row.fmt),
+        fmtRaw(aoVal,  row.fmt),
+        fmtRaw(qVal,   row.fmt),
+        fmtRaw(qPtVal, row.fmt),
+        fmtRaw(qaoVal, row.fmt),
+        fmtRaw(pm0Val, row.fmt),
+        fmtRaw(pm1Val, row.fmt),
+        fmtRaw(pvVal,  row.fmt)
+      ]);
+    });
+    rows.push([]);
+  });
+  rows.push(['* Raw USD (PH: PHP ÷ 60, INDO: IDR ÷ 16,200)  |  B2C = PH B2C + INDO Tele-Sales  |  '
+    + 'Renewal/Branch = PH only  |  UC Attached = PH UC Attached + INDO Dealer  |  '
+    + 'B2B = PH B2B & Affiliates + INDO B2B/SAU  |  '
+    + 'Agency = PH Agency + INDO Agency  |  w/ Passthrough = PH passthrough delta + INDO actuals as-is']);
+  return rows;
+}
+
+function buildINDORows(data, start, end) {
+  var dateRangeLbl = fmtDate(start) + ' – ' + fmtDate(end);
+  var colLbl       = isoToMonthStr(start);
+  var qLbl         = QUARTER_LABELS[colLbl] || 'QTD';
+
+  var pm = (data.priorMonths || []).slice(0, 2);
+  while (pm.length < 2) pm.push(null);
+  var pm0Lbl = pm[0] ? pm[0].label : '–';
+  var pm1Lbl = pm[1] ? pm[1].label : '–';
+
+  var rows = [
+    ['SEA Insurance MIS — Indonesia'],
+    ['Date Range: ' + dateRangeLbl, '', 'Frozen At: ' + new Date().toLocaleString()],
+    [],
+    ['Channel / Metric', colLbl+' Actuals', colLbl+' AOP', qLbl+' Actuals', qLbl+' AOP',
+     pm0Lbl+' Actuals', pm1Lbl+' Actuals', 'Prev Qtr Actuals']
+  ];
+  INDO_CHANNELS.forEach(function(ch) {
+    rows.push([ch.label]);
+    var act  = getC(data.rangeActuals,   ch.key);
+    var maop = getC(data.aopRange,       ch.key);
+    var qtd  = getC(data.qtdActuals,     ch.key);
+    var qaop = getC(data.aopQTD,        ch.key);
+    var prev = data.prevQtrActuals ? getC(data.prevQtrActuals, ch.key) : null;
+    var pm0  = pm[0] ? getC(pm[0].data, ch.key) : null;
+    var pm1  = pm[1] ? getC(pm[1].data, ch.key) : null;
+    var isDlr = ch.key === 'Dealer';
+
+    INDO_ROWS.forEach(function(row) {
+      rows.push([
+        '  ' + row.label,
+        fmtRaw(pctOrVal(row.key, act), row.fmt),
+        fmtRaw(isDlr ? null : pctOrVal(row.key, maop), row.fmt),
+        fmtRaw(pctOrVal(row.key, qtd), row.fmt),
+        fmtRaw(isDlr ? null : pctOrVal(row.key, qaop), row.fmt),
+        fmtRaw(pm0 ? pctOrVal(row.key, pm0) : null, row.fmt),
+        fmtRaw(pm1 ? pctOrVal(row.key, pm1) : null, row.fmt),
+        fmtRaw(prev ? pctOrVal(row.key, prev) : null, row.fmt)
+      ]);
+    });
+    rows.push([]);
+  });
+  rows.push(['* Raw USD (IDR ÷ 16,200)  |  AOP: INDO-AOP27']);
+  return rows;
+}
+
+function applyColWidths(ws, widths) {
+  ws['!cols'] = widths.map(function(w) { return { wch: w }; });
+}
+
+function exportToCSV(country, start, end, data) {
+  var rows = country === 'PH'  ? buildPHRows(data, start, end)
+           : country === 'SEA' ? buildSEARows(data, start, end)
+           : buildINDORows(data, start, end);
+  var csv = rows.map(function(r) {
+    return r.map(function(c) {
+      var s = String(c == null ? '' : c);
+      return s.indexOf(',') !== -1 ? '"'+s+'"' : s;
+    }).join(',');
+  }).join('\n');
+
+  try {
+    var blob = new Blob([csv], {type:'text/csv'});
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href = url; a.download = 'MIS_'+country+'_'+start+'_'+end+(country === 'SEA' ? '' : '_FROZEN')+'.csv';
+    a.click(); URL.revokeObjectURL(url);
+    showToast('CSV exported (SheetJS unavailable)', 'info');
+  } catch(ex) {
+    showToast('Export failed — copy data manually', 'err');
+  }
+}
+
+function showToast(msg, type) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast '+(type||'ok')+' show';
+  setTimeout(function(){ t.classList.remove('show'); }, 3500);
+}
+
+</script>
+</body>
+</html>
