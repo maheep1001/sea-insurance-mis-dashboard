@@ -765,10 +765,6 @@ const FLASH_CONFIG = {
   outputFolderId: ''
 };
 
-// Policy status values that mark a non-live INDO policy (lower-cased compare).
-// Rows matching ANY of these are excluded from the W/O cancellations bucket.
-const FLASH_INDO_EXCLUDE_STATUSES = { 'cancelled': true, 'rejected': true };
-
 
 // ── Window → reporting month / quarter / FY (Apr–Mar fiscal year) ──
 // PH anchors on the START month (the reporting month); extended end days
@@ -1227,323 +1223,250 @@ function flashConsolidateSAU_(targetSS, cfg, startDate, endDate) {
 // ============================================================
 //  SUMMARY BUILDERS
 //
-//  PH  → flashBuildSummaryPH_()
-//          Writes live SUMIFS/COUNTIFS formulas into Summary (PHP).
-//          Summary USD = formula mirror of PHP tab, every monetary cell ÷ FX.
+//  Both PH and INDO summaries write LIVE SUMIFS/COUNTIFS/reference formulas
+//  into the sheet (never code-computed static values), matching the reference
+//  finalized flash files exactly. 12-column layout (A–L), three side-by-side
+//  blocks with the row label repeated in A, G, and K:
 //
-//  INDO → flashBuildSummaryINDO_()
-//          Aggregates in code (header-based column lookup, same as PH).
-//          Uses flashBlocksFromAgg_() + flashWriteSummaryTab_() to render
-//          Summary (IDR) and Summary USD.
+//    A=label  B=Net Premium  C=Revenue  D=Units  (E,F blank)
+//    G=label  H=COGS                              (I,J blank)
+//    K=label  L=Gross Margin
 //
-//  COGS is always Revenue − Gross Margin (never a raw source column).
+//  PH  → flashBuildSummaryPH_()    → flashWriteSummaryPHFormulas_()
+//          Summary USD = pure reference mirror of Summary (PHP), B/C/H/L ÷ FX.
+//  INDO → flashBuildSummaryINDO_() → writes Summary (IDR) + Summary (USD)
+//          directly (USD is NOT a mirror — it's an independent set of
+//          formulas with /FX baked into each SUMIFS, matching the reference).
 // ============================================================
-
-// Coerce a cell to a number: '' / null → 0; strip thousands separators and
-// treat (parentheses) as negative (accounting style).
-function flashCellNum_(v) {
-  if (v === '' || v === null || v === undefined) return 0;
-  if (typeof v === 'number') return v;
-  const n = parseFloat(String(v).replace(/[, ]/g, '').replace(/\(/g, '-').replace(/\)/g, ''));
-  return isNaN(n) ? 0 : n;
-}
-// A fresh accumulator (one per W and per W/O bucket).
-function flashZero_() { return { nops:0, np:0, rev:0, gm:0 }; }
-// Add one policy's metrics into an accumulator (n = unit count, usually 1).
-function flashAcc_(o, np, rev, gm, n) { o.np += np; o.rev += rev; o.gm += gm; o.nops += n; }
-
-// Generic writer: blocks = [{ name, rows:[{label,w,wo}], subW, subWO }], plus a grand total.
-// Writes one tab; monetary values ÷ divisor; COGS = Rev − GM. W/O cancellations
-// ONLY — the W/ cancellations block has been removed per spec (each row's `w`
-// accumulator is still passed in by the caller but is no longer written out).
-// Layout per row: label | Net Premium | Revenue | Units | COGS | Gross Margin.
-function flashWriteSummaryTab_(ss, tabName, blocks, grand, divisor, ccyLabel, w, fxText) {
-  let sh = ss.getSheetByName(tabName);
-  if (!sh) sh = ss.insertSheet(tabName);
-  else     sh.clearContents();
-
-  const m = function(x){ return Math.round((x / divisor) * 100) / 100; };
-  const line = function(label, a) {
-    const cogsWO = a.wo.rev - a.wo.gm;
-    return [ label, m(a.wo.np), m(a.wo.rev), Math.round(a.wo.nops), m(cogsWO), m(a.wo.gm) ];
-  };
-
-  const out = [];
-  out.push([ 'INS ' + (ccyLabel === 'USD' ? 'Summary (USD)' : 'Summary (Local ' + ccyLabel + ')') +
-             ' — ' + w.monName + '-' + w.yy + ' ' + w.fy ]);
-  out.push([ 'Window: ' + w.quarter, '', 'FX: ' + fxText ]);
-  out.push([]);
-  out.push([ 'Channel / Product','Net Premium','Revenue','Units','COGS','Gross Margin' ]);
-
-  blocks.forEach(function(b) {
-    out.push([ b.name ]);
-    b.rows.forEach(function(r) { out.push(line('  ' + r.label, r)); });
-    out.push(line('  Total ' + b.name, { w:b.subW, wo:b.subWO }));
-    out.push([]);
-  });
-  out.push(line('GRAND TOTAL', { w:grand.w, wo:grand.wo }));
-
-  const width = 6;
-  const padded = out.map(function(r){ while (r.length < width) r.push(''); return r; });
-  sh.getRange(1, 1, padded.length, width).setValues(padded);
-  return out.length;
-}
 
 
 // ── PH Summary ───────────────────────────────────────────────
-//  Builds Summary (PHP) with live SUMIFS/COUNTIFS formulas pointing at the
-//  INS_* detail tabs, matching the reference Summary (PHP) tab layout.
-//
-//  INS_* column schema (A=Workbook, B=Sheet, data from C):
-//    C=Channel   E=Product   G=Policy Number (unit count)
-//    K=Policy Status
-//    AB=Net_Premium   AT=MIS_Revenue   AU=Gross_Margin   AV=Payment Status
-//
-//  W/ cancellations  = all statuses (no status filter).
-//  W/O cancellations = Payment Status ≠ "Cancelled" (applied to all tabs).
-//  Summary USD       = formula mirror of Summary (PHP), every monetary cell ÷ FX.
-//
-//  PH_LAYOUT defines the locked row order matching the reference sheet.
+//  PH_LAYOUT: locked row order matching the reference Summary (PHP) tab.
 //  Each entry is one of:
-//    { tab, ch, pr, label }          — data row: SUMIFS/COUNTIFS into that tab
-//    { isSubtotal, label, members }  — SUM of named member rows
-//    { isPassthrough, label }        — blank cells (manual entry)
-//    { isGrandTotal, label }         — SUM of all subtotal rows
-//
-//  ch = Channel criterion (null = omit, match all rows in tab)
-//  pr = Product criterion (null = omit, match all products)
+//    { tab, label }                        — standard data row: SUMIFS/COUNTIFS
+//                                             using `label` itself as the
+//                                             channel criterion (via $A{row})
+//    { tab, label, isUC:true }              — same as above but INS_UC uses
+//                                             different column letters (it has
+//                                             an extra 'LOB' column at B)
+//    { isSDD:true, tab, sheet, prodType, label } — "Sharing Deal Data" rows:
+//                                             SUMIFS(tab!col:col, tab!C:C,
+//                                             prodType, tab!B:B, sheet) — no
+//                                             cancellation/status filter; COGS
+//                                             (col H) is a literal 0, not a formula
+//    { isSubtotal, label, members }         — SUM of named member rows above
+//    { isGrandTotal, label }                — SUM of all subtotal rows
 function flashBuildSummaryPH_(ss, cfg, w) {
 
   const PH_LAYOUT = [
-    // ── INS_B2C ────────────────────────────────────────────────────────────────
-    // Channel values in source: 'b2c-MOT', 'b2c-Others', 'b2c-CTPL'
-    // W/O filter: Payment Status <> Cancelled (AV col)
-    { tab:'INS_B2C',          ch:'b2c-MOT',         pr:null, gmPr:null,            label:'b2c-MOT'         },
-    { tab:'INS_B2C',          ch:'b2c-Others',       pr:null, gmPr:null,            label:'b2c-Others'       },
-    { tab:'INS_B2C',          ch:'b2c-CTPL',         pr:null, gmPr:null,            label:'b2c-CTPL'         },
+    // ── INS_B2C ────────────────────────────────────────────────────────────
+    { tab:'INS_B2C', label:'b2c-MOT' },
+    { tab:'INS_B2C', label:'b2c-Others' },
+    { tab:'INS_B2C', label:'b2c-CTPL' },
     { isSubtotal:true, label:'Total Ins_Open_B2C',
       members:['b2c-MOT','b2c-Others','b2c-CTPL'] },
 
-    // ── xDeal (INS_XDeal_Branch) ───────────────────────────────────────────────
-    // Channel values in source: 'xDeal-MOT', 'xDeal-CTPL', 'xDeal-Others'
-    // W/O filter: Payment Status <> Cancelled (AV col)
-    { tab:'INS_XDeal_Branch', ch:'xDeal-MOT',        pr:null, gmPr:null,            label:'xDeal-MOT'       },
-    { tab:'INS_XDeal_Branch', ch:'xDeal-CTPL',       pr:null, gmPr:null,            label:'xDeal-CTPL'      },
-    { tab:'INS_XDeal_Branch', ch:'xDeal-Others',     pr:null, gmPr:null,            label:'xDeal-Others'    },
-
-    // ── Branch (INS_XDeal_Branch) ───────────────────────────────────────────────
-    // Channel values in source: 'Branch-LIPA-MOT', 'Branch-MM-MOT', 'Branch-NAGA-MOT', 'Branch-Others'
-    // W/O filter: Payment Status <> Cancelled (AV col)
-    { tab:'INS_XDeal_Branch', ch:'Branch-LIPA-MOT',  pr:null, gmPr:null,            label:'Branch-LIPA-MOT' },
-    { tab:'INS_XDeal_Branch', ch:'Branch-MM-MOT',    pr:null, gmPr:null,            label:'Branch-MM-MOT'   },
-    { tab:'INS_XDeal_Branch', ch:'Branch-NAGA-MOT',  pr:null, gmPr:null,            label:'Branch-NAGA-MOT' },
-    { tab:'INS_XDeal_Branch', ch:'Branch-Others',    pr:null, gmPr:null,            label:'Branch-Others'   },
+    // ── xDeal + Branch (INS_XDeal_Branch) ──────────────────────────────────
+    { tab:'INS_XDeal_Branch', label:'xDeal-MOT' },
+    { tab:'INS_XDeal_Branch', label:'xDeal-CTPL' },
+    { tab:'INS_XDeal_Branch', label:'xDeal-Others' },
+    { tab:'INS_XDeal_Branch', label:'Branch-LIPA-MOT' },
+    { tab:'INS_XDeal_Branch', label:'Branch-MM-MOT' },
+    { tab:'INS_XDeal_Branch', label:'Branch-NAGA-MOT' },
+    { tab:'INS_XDeal_Branch', label:'Branch-Others' },
     { isSubtotal:true, label:'Total Ins_Open_Branch',
       members:['xDeal-MOT','xDeal-CTPL','xDeal-Others',
                'Branch-LIPA-MOT','Branch-MM-MOT','Branch-NAGA-MOT','Branch-Others'] },
 
-    // ── Affiliates (INS_B2B) ─────────────────────────────────────────────────────
-    // W/O filter: Payment Status <> Cancelled (AV col); gmPr kept for label context only
-    { tab:'INS_B2B',          ch:'B2B-MOT',          pr:null, gmPr:'Comprehensive', label:'Comprehensive'   },
-    { tab:'INS_B2B',          ch:'B2B-Others',       pr:null, gmPr:null,            label:'B2B-Others'      },
-    { tab:'INS_B2B',          ch:'B2B-CTPL',         pr:null, gmPr:'CTPL',          label:'CTPL'            },
-    { isPassthrough:true, label:'Sharing Deal Data (MOTOR)'                                                  },
-    { isPassthrough:true, label:'Sharing Deal Data (NON MOTOR)'                                              },
+    // ── Affiliates (INS_B2B) ────────────────────────────────────────────────
+    { tab:'INS_B2B', label:'B2B-MOT' },
+    { tab:'INS_B2B', label:'B2B-Others' },
+    { tab:'INS_B2B', label:'B2B-CTPL' },
+    { isSDD:true, tab:'INS_B2B', sheet:'B2B', prodType:'Motor',     label:'Sharing Deal Data (MOTOR)' },
+    { isSDD:true, tab:'INS_B2B', sheet:'B2B', prodType:'Non-Motor', label:'Sharing Deal Data (NON MOTOR)' },
     { isSubtotal:true, label:'Total Ins_Open_Affiliates',
-      members:['Comprehensive','B2B-Others','CTPL',
+      members:['B2B-MOT','B2B-Others','B2B-CTPL',
                'Sharing Deal Data (MOTOR)','Sharing Deal Data (NON MOTOR)'] },
 
-    // ── Renewals (INS_Renewals) ──────────────────────────────────────────────────
-    // W/O filter: Payment Status <> Cancelled (AV col); gmPr kept for label context only
-    { tab:'INS_Renewals',     ch:'Renewal-MOT',      pr:null, gmPr:'Comprehensive', label:'Comprehensive'   },
-    { tab:'INS_Renewals',     ch:'Renewal-CTPL',     pr:null, gmPr:'CTPL',          label:'CTPL'            },
+    // ── Renewals (INS_Renewals) ─────────────────────────────────────────────
+    { tab:'INS_Renewals', label:'Renewal-MOT' },
+    { tab:'INS_Renewals', label:'Renewal-CTPL' },
     { isSubtotal:true, label:'Total Ins_Renewals',
-      members:['Comprehensive','CTPL'] },
+      members:['Renewal-MOT','Renewal-CTPL'] },
 
-    // ── Agency (INS_Agency) ────────────────────────────────────────────────────────
-    // W/O filter: Payment Status <> Cancelled (AV col); gmPr kept for label context only
-    // (gmPr field retained in layout for reference but no longer drives a Policy Status filter)
-    { tab:'INS_Agency',       ch:'Agency-MOT',        pr:null, gmPr:'Comprehensive', label:'Comprehensive'   },
-    { tab:'INS_Agency',       ch:'Agency-Others',     pr:null, gmPr:null,            label:'Agency-Others'   },
-    { tab:'INS_Agency',       ch:'Agency-CTPL',       pr:null, gmPr:'CTPL',          label:'CTPL'            },
-    { tab:'INS_Agency',       ch:'Agency-Coverex',    pr:null, gmPr:'Coverex',       label:'Coverex NAV'     },
-    { isPassthrough:true, label:'Sharing Deal Data (MOTOR)'                                                  },
-    { isPassthrough:true, label:'Sharing Deal Data (NON MOTOR)'                                              },
+    // ── Agency (INS_Agency) ─────────────────────────────────────────────────
+    { tab:'INS_Agency', label:'Agency-MOT' },
+    { tab:'INS_Agency', label:'Agency-Others' },
+    { tab:'INS_Agency', label:'Agency-CTPL' },
+    { tab:'INS_Agency', label:'Agency-Coverex' },
+    { isSDD:true, tab:'INS_Agency', sheet:'Agency', prodType:'Motor',     label:'Sharing Deal Data (MOTOR)' },
+    { isSDD:true, tab:'INS_Agency', sheet:'Agency', prodType:'Non Motor', label:'Sharing Deal Data (NON MOTOR)' },
     { isSubtotal:true, label:'Total Ins_Agency',
-      members:['Comprehensive','Agency-Others','CTPL','Coverex NAV',
+      members:['Agency-MOT','Agency-Others','Agency-CTPL','Agency-Coverex',
                'Sharing Deal Data (MOTOR)','Sharing Deal Data (NON MOTOR)'] },
 
-    // ── UC Attached (INS_UC) ─────────────────────────────────────────────────────
-    // W/O filter: Payment Status <> Cancelled (AV col); gmPr kept for label context only
-    { tab:'INS_UC',           ch:'UC-MOT',            pr:null, gmPr:'Comprehensive', label:'Comprehensive'   },
+    // ── UC Attached (INS_UC) — different column letters, see isUC ──────────
+    { tab:'INS_UC', label:'UC-MOT', isUC:true },
     { isSubtotal:true, label:'Total Ins_UC Attached',
-      members:['Comprehensive'] },
+      members:['UC-MOT'] },
 
-    // ── Grand Total ────────────────────────────────────────────────────────────────
+    // ── Grand Total ──────────────────────────────────────────────────────────
     { isGrandTotal:true, label:'GRAND TOTAL' }
   ];
 
-  flashWriteSummaryPHFormulas_(ss, 'Summary (PHP)', PH_LAYOUT, w, 'PHP', 'local currency');
-  flashWriteSummaryUSDMirror_(ss, 'Summary USD', 'Summary (PHP)', w, cfg.fx);
-  return { note: 'PH Summary (PHP) built with SUMIFS formulas; Summary USD = PHP ÷ ' + cfg.fx + '.' };
+  flashWriteSummaryPHFormulas_(ss, 'Summary (PHP)', PH_LAYOUT, w, 'PHP', cfg.fx);
+  flashWriteSummaryUSDMirror_(ss, 'Summary (USD)', 'Summary (PHP)', w, cfg.fx);
+  return { note: 'PH Summary (PHP) built with live SUMIFS formulas; Summary (USD) = reference mirror ÷ ' + cfg.fx + '.' };
 }
 
 
 // ── flashWriteSummaryPHFormulas_ ──────────────────────────────
-//  Writes Summary (PHP) with live SUMIFS/COUNTIFS formulas. W/O
-//  cancellations ONLY — the W/ cancellations block has been removed per
-//  spec. 6 columns (A–F):
-//
-//    A=channel label (ch value when set, else rowDef.label)
-//    B=Net Premium   C=Revenue   D=Units   E=COGS   F=Gross Margin
-//
-//  COGS (E) = Revenue − Gross Margin, always a formula.
-//
-//  Row label (col A): the channel string (ch) is used as the label so the
-//  SUMIFS can reference $A{row} dynamically. Editing the label cell updates
-//  all formulas in that row automatically.
-//
-//  Filter: Payment Status (col AV) ≠ "Cancelled" AND Policy Status (col K)
-//  ≠ "Not Issued" — applied uniformly to ALL INS_* tabs. "Policy Issued"
-//  as a required value on Policy Status is NOT used (only the "Not Issued"
-//  exclusion applies there).
-function flashWriteSummaryPHFormulas_(ss, tabName, layout, w, ccyLabel, fxText) {
+//  Writes Summary (PHP): 12 columns (A–L), three blocks, label repeated in
+//  A/G/K. Standard rows use SUMIFS/COUNTIFS filtered by:
+//    Payment Status (col AV) <> "Cancelled"  AND  Policy Status (col K) <> "Not Issued"
+//  INS_UC uses different column letters (D=Channel, L=Policy Status,
+//  AC=Net_Premium, AU=Revenue, AV=Gross_Margin, AW=Payment Status) because
+//  that tab has an extra 'LOB' column shifting everything right by one.
+//  Units (col D) are counted via COUNTIFS on the Net_Premium column <> blank
+//  (not the Policy Number column).
+//  "Sharing Deal Data" rows have no status filter at all — they sum rows
+//  where Channel (col C) = "Motor"/"Non-Motor"/"Non Motor" and Sheet (col B)
+//  = the source sheet name; their COGS cell (H) is a literal 0.
+function flashWriteSummaryPHFormulas_(ss, tabName, layout, w, ccyLabel, fx) {
   let sh = ss.getSheetByName(tabName);
   if (!sh) sh = ss.insertSheet(tabName);
   else     sh.clearContents();
 
-  // ── INS_* detail-tab column letters ─────────────────────────────────────
-  const CC  = 'C';   // Channel
-  const CP  = 'E';   // Product
-  const CU  = 'G';   // Policy Number  (non-blank = 1 unit in COUNTIFS)
-  const CST = 'K';   // Policy Status  — filter: <>Not Issued
-  const CPS = 'AV';  // Payment Status — filter: <>Cancelled
-  const CNP = 'AB';  // Net_Premium
-  const CRV = 'AT';  // MIS_Revenue
-  const CGM = 'AU';  // Gross_Margin
+  const WIDTH = 12; // A–L
 
-  // ── Filter rule (applied uniformly to ALL tabs) ───────────────────────
-  // Payment Status (col AV) <> "Cancelled".
-  // Policy Status (col K) <> "Not Issued".
-  // These are two separate columns/conditions, both applied as exclusions.
-  // "Policy Issued" as a required value is NOT used.
-  // This applies to every INS_* tab — B2C, XDeal_Branch, B2B, Renewals, Agency, UC.
+  // Standard column letters (B2C, XDeal_Branch, B2B, Renewals, Agency)
+  const STD = { CC:'C', CST:'K', CPS:'AV', CNP:'AB', CRV:'AT', CGM:'AU' };
+  // INS_UC column letters (shifted by the extra 'LOB' column)
+  const UC  = { CC:'D', CST:'L', CPS:'AW', CNP:'AC', CRV:'AU', CGM:'AV' };
 
-  // ── Formula builders ─────────────────────────────────────────────────────
-
-  // SUMIFS filtered by Payment Status <> Cancelled AND Policy Status <> Not Issued.
-  // ch = channel criterion string or null; pr = product criterion string or null.
-  // When ch is a cell reference like '$A5' it is passed WITHOUT surrounding quotes.
-  function fSumifs(tab, col, ch, pr, chIsRef) {
-    const sum  = "'" + tab + "'!" + col + ':' + col;
-    const crit = [];
-    if (ch) {
-      const chVal = chIsRef ? ch : '"' + ch + '"';
-      crit.push("'" + tab + "'!" + CC + ':' + CC + ',' + chVal);
+  // Standard data-row SUMIFS/COUNTIFS: channel via $A{row} cell reference,
+  // Payment Status <> Cancelled, Policy Status <> Not Issued.
+  function stdFormulas(tab, sr, cols) {
+    const chRef = '$A' + sr;
+    function sumifs(col) {
+      return 'SUMIFS(' + tab + '!' + col + ':' + col + ',' +
+        tab + '!' + cols.CC  + ':' + cols.CC  + ',' + chRef + ',' +
+        tab + '!' + cols.CPS + ':' + cols.CPS + ',"<>Cancelled",' +
+        tab + '!' + cols.CST + ':' + cols.CST + ',"<>Not Issued")';
     }
-    if (pr) crit.push("'" + tab + "'!" + CP + ':' + CP + ',"' + pr + '"');
-    crit.push("'" + tab + "'!" + CPS + ':' + CPS + ',"<>Cancelled"');
-    crit.push("'" + tab + "'!" + CST + ':' + CST + ',"<>Not Issued"');
-    return 'SUMIFS(' + sum + ',' + crit.join(',') + ')';
+    function countifs() {
+      return 'COUNTIFS(' + tab + '!' + cols.CNP + ':' + cols.CNP + ',"<>",' +
+        tab + '!' + cols.CC  + ':' + cols.CC  + ',' + chRef + ',' +
+        tab + '!' + cols.CPS + ':' + cols.CPS + ',"<>Cancelled",' +
+        tab + '!' + cols.CST + ':' + cols.CST + ',"<>Not Issued")';
+    }
+    return {
+      B: '=' + sumifs(cols.CNP),
+      C: '=' + sumifs(cols.CRV),
+      D: '=' + countifs(),
+      L: '=' + sumifs(cols.CGM)
+    };
   }
 
-  // COUNTIFS filtered by Payment Status <> Cancelled AND Policy Status <> Not Issued.
-  function fCountifs(tab, ch, pr, chIsRef) {
-    const unitR = "'" + tab + "'!" + CU + ':' + CU;
-    const crit  = [unitR + ',"<>"'];
-    if (ch) {
-      const chVal = chIsRef ? ch : '"' + ch + '"';
-      crit.push("'" + tab + "'!" + CC + ':' + CC + ',' + chVal);
+  // Sharing Deal Data row: SUMIFS(tab!col:col, tab!C:C, prodType, tab!B:B, sheet).
+  // No status filter. COGS (col H) is hardcoded 0, not a formula.
+  function sddFormulas(tab, sheetVal, prodVal) {
+    function sumifs(col) {
+      return 'SUMIFS(' + tab + '!' + col + ':' + col + ',' +
+        tab + '!C:C,"' + prodVal + '",' +
+        tab + '!B:B,"' + sheetVal + '")';
     }
-    if (pr) crit.push("'" + tab + "'!" + CP + ':' + CP + ',"' + pr + '"');
-    crit.push("'" + tab + "'!" + CPS + ':' + CPS + ',"<>Cancelled"');
-    crit.push("'" + tab + "'!" + CST + ':' + CST + ',"<>Not Issued"');
-    return 'COUNTIFS(' + crit.join(',') + ')';
+    return {
+      B: '=' + sumifs('AB'),
+      C: '=' + sumifs('AT'),
+      D: '=COUNTIFS(' + tab + '!C:C,"' + prodVal + '",' + tab + '!B:B,"' + sheetVal + '")',
+      L: '=' + sumifs('AU')
+    };
   }
 
   const labelRow = {};
   const out      = [];
-  const WIDTH    = 6; // A–F
 
   // ── Header rows ──────────────────────────────────────────────────────────
-  out.push(['INS Summary (' + ccyLabel + ') \u2014 ' + w.monName + '-' + w.yy + ' ' + w.fy,
-            '','','','','']);
-  out.push(['Window: ' + w.quarter,'','FX: ' + fxText,'','','']);
-  out.push(['','','','','','']);
-  out.push(['Channel / Product','Net Premium','Revenue','Units','COGS','Gross Margin']);
+  const r1 = Array(WIDTH).fill('');
+  r1[0] = 'INS Summary (' + ccyLabel + ') \u2014 ' + w.monName + '-' + w.yy + ' ' + w.fy;
+  out.push(r1);
+
+  const r2 = Array(WIDTH).fill('');
+  r2[2] = 'Local currency: ' + fx;   // col C
+  out.push(r2);
+
+  out.push(Array(WIDTH).fill(''));   // row 3 blank
+
+  const r4 = Array(WIDTH).fill('');
+  r4[0]='Channel / Product'; r4[1]='Net Premium'; r4[2]='Revenue'; r4[3]='Units';
+  r4[6]='Channel / Product'; r4[7]='COGS';
+  r4[10]='Channel / Product'; r4[11]='Gross Margin';
+  out.push(r4);
 
   // ── Data rows ─────────────────────────────────────────────────────────────
   layout.forEach(function(rowDef) {
     const sr = out.length + 1;
+    const row = Array(WIDTH).fill('');
+    row[0] = rowDef.label; row[6] = rowDef.label; row[10] = rowDef.label;
 
-    // Passthrough: label only, data left blank for manual entry
-    if (rowDef.isPassthrough) {
-      labelRow[rowDef.label] = sr;
-      out.push([rowDef.label,'','','','','']);
-      return;
-    }
-
-    // Subtotal: SUM over named member rows
     if (rowDef.isSubtotal) {
       labelRow[rowDef.label] = sr;
       const refs = rowDef.members.map(function(m){ return labelRow[m]; }).filter(Boolean);
       function sRef(c) {
-        return refs.length ? 'SUM('+refs.map(function(r){return c+r;}).join(',')+')' : '0';
+        return refs.length ? 'SUM(' + refs.map(function(r){ return c + r; }).join(',') + ')' : '0';
       }
-      out.push([rowDef.label,
-        '='+sRef('B'), '='+sRef('C'), '='+sRef('D'), '=C'+sr+'-F'+sr, '='+sRef('F')]);
+      row[1] = '=' + sRef('B'); row[2] = '=' + sRef('C'); row[3] = '=' + sRef('D');
+      row[7] = '=C' + sr + '-L' + sr;
+      row[11] = '=' + sRef('L');
+      out.push(row);
       return;
     }
 
-    // Grand total: SUM over all subtotal rows
     if (rowDef.isGrandTotal) {
-      const stRefs = layout
-        .filter(function(r){ return r.isSubtotal; })
-        .map(function(r){ return labelRow[r.label]; })
-        .filter(Boolean);
+      const stRefs = layout.filter(function(r){ return r.isSubtotal; })
+        .map(function(r){ return labelRow[r.label]; }).filter(Boolean);
       function gtRef(c) {
-        return stRefs.length ? 'SUM('+stRefs.map(function(r){return c+r;}).join(',')+')' : '0';
+        return stRefs.length ? 'SUM(' + stRefs.map(function(r){ return c + r; }).join(',') + ')' : '0';
       }
-      out.push([rowDef.label,
-        '='+gtRef('B'), '='+gtRef('C'), '='+gtRef('D'), '=C'+sr+'-F'+sr, '='+gtRef('F')]);
+      row[1] = '=' + gtRef('B'); row[2] = '=' + gtRef('C'); row[3] = '=' + gtRef('D');
+      row[7] = '=C' + sr + '-L' + sr;
+      row[11] = '=' + gtRef('L');
+      out.push(row);
       return;
     }
 
-    // Normal data row
-    // Col A label: use the channel string (ch) when it exists, otherwise rowDef.label.
-    // This means B2B-MOT, b2c-MOT, Renewal-MOT etc. appear as row headers.
-    // The SUMIFS then reference $A{row} (the col-A cell) instead of a hardcoded
-    // string, so editing the label cell automatically updates all formulas.
-    const ch   = rowDef.ch  || null;
-    const pr   = rowDef.pr  || null;
-    const tab  = rowDef.tab;
-    const rowLabel = ch || rowDef.label;       // channel string preferred as label
-    labelRow[rowDef.label] = sr;               // still track by logical label for subtotals
+    labelRow[rowDef.label] = sr;
 
-    // chRef: reference to this row's col-A cell, used as the channel criterion.
-    // chIsRef=true tells fSumifs/fCountifs NOT to wrap it in extra quotes.
-    const chRef  = '$A' + sr;
-    const chIsRef = !!ch;   // only use cell-ref criterion when a channel is defined
+    if (rowDef.isSDD) {
+      const f = sddFormulas(rowDef.tab, rowDef.sheet, rowDef.prodType);
+      row[1] = f.B; row[2] = f.C; row[3] = f.D;
+      row[7] = 0;                                    // literal zero, not a formula
+      row[11] = f.L;
+      out.push(row);
+      return;
+    }
 
-    out.push([rowLabel,
-      '=' + fSumifs(tab, CNP, chIsRef ? chRef : null, pr, chIsRef),   // B: Net Premium
-      '=' + fSumifs(tab, CRV, chIsRef ? chRef : null, pr, chIsRef),   // C: Revenue
-      '=' + fCountifs(tab, chIsRef ? chRef : null, pr, chIsRef),      // D: Units
-      '=C' + sr + '-F' + sr,                                          // E: COGS = Rev - GM
-      '=' + fSumifs(tab, CGM, chIsRef ? chRef : null, pr, chIsRef)    // F: Gross Margin
-    ]);
+    const cols = rowDef.isUC ? UC : STD;
+    const f = stdFormulas(rowDef.tab, sr, cols);
+    row[1] = f.B; row[2] = f.C; row[3] = f.D;
+    row[7] = '=C' + sr + '-L' + sr;
+    row[11] = f.L;
+    out.push(row);
   });
 
-  const padded = out.map(function(r){ while (r.length < WIDTH) r.push(''); return r; });
-  sh.getRange(1, 1, padded.length, WIDTH).setValues(padded);
+  sh.getRange(1, 1, out.length, WIDTH).setValues(out);
 }
 
 
 // ── flashWriteSummaryUSDMirror_ ───────────────────────────────
-//  Builds Summary USD as a formula mirror of Summary (PHP).
-//  Monetary cells = PHP cell ÷ FX; units and labels referenced directly.
-//  6-col layout (A-F, 0-based): B=1 (Net Premium), C=2 (Revenue),
-//  D=3 (Units, NOT monetary), E=4 (COGS), F=5 (Gross Margin).
+//  Builds Summary (USD) as a pure reference mirror of Summary (PHP):
+//    B, C, H, L  = 'Summary (PHP)'!{cell} / FX
+//    D           = 'Summary (PHP)'!{cell}   (units — not divided)
+//    A, G, K     = same literal label text as the PHP tab (not a reference)
+//  Title row 1 and the "Local currency" note in row 2 are copied VERBATIM
+//  from the PHP tab (including the "(PHP)" wording) — matching the reference
+//  finalized file exactly, which does not rewrite these for the USD tab.
 function flashWriteSummaryUSDMirror_(ss, tabName, phpTabName, w, fx) {
   const phpSh = ss.getSheetByName(phpTabName);
   if (!phpSh) return;
@@ -1551,23 +1474,32 @@ function flashWriteSummaryUSDMirror_(ss, tabName, phpTabName, w, fx) {
   if (!sh) sh = ss.insertSheet(tabName);
   else     sh.clearContents();
 
-  const numRows = phpSh.getLastRow();
-  const WIDTH   = 6;
-  // 6-col layout (A-F, 0-based): B=1 (Net Premium), C=2 (Revenue), E=4 (COGS),
-  // F=5 (Gross Margin) are monetary; D=3 (Units) is a count, not monetary.
-  const MONEY   = [1,2,4,5];
+  const phpValues = phpSh.getDataRange().getValues();
+  const numRows   = phpValues.length;
+  const WIDTH     = 12;
+  const MONEY     = [1, 2, 7, 11]; // 0-based: B, C, H, L
+
   const out = [];
   for (let r = 0; r < numRows; r++) {
     const phpRow = r + 1;
-    const outRow = [];
+    const row = [];
     for (let c = 0; c < WIDTH; c++) {
-      const ref = "'" + phpTabName + "'!" + colLetter_(c+1) + phpRow;
-      if      (r===0 && c===0) outRow.push('INS Summary (USD) — '+w.monName+'-'+w.yy+' '+w.fy);
-      else if (r===1 && c===2) outRow.push('FX: PHP ÷ '+fx);
-      else if (MONEY.indexOf(c)!==-1) outRow.push('='+ref+'/'+fx);
-      else outRow.push('='+ref);
+      if (r < 4) {
+        // Header block (rows 1–4): copy literal text as-is (no divide)
+        row.push(phpValues[r][c]);
+      } else if (MONEY.indexOf(c) !== -1) {
+        const ref = "'" + phpTabName + "'!" + colLetter_(c + 1) + phpRow;
+        row.push('=' + ref + '/' + fx);
+      } else if (c === 3) {
+        // Units (D): reference directly, not divided
+        const ref = "'" + phpTabName + "'!" + colLetter_(c + 1) + phpRow;
+        row.push('=' + ref);
+      } else {
+        // Label columns (A, G, K): literal text, same as PHP tab
+        row.push(phpValues[r][c]);
+      }
     }
-    out.push(outRow);
+    out.push(row);
   }
   sh.getRange(1, 1, out.length, WIDTH).setValues(out);
 }
@@ -1577,164 +1509,172 @@ function flashWriteSummaryUSDMirror_(ss, tabName, phpTabName, w, fx) {
 //  Convert a 1-based column number to a spreadsheet letter (A…Z, AA, AB…).
 function colLetter_(n) {
   let s = '';
-  while (n>0) { const r=(n-1)%26; s=String.fromCharCode(65+r)+s; n=Math.floor((n-1)/26); }
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
   return s;
 }
 
-// Converts the { order:[blockName...], blocks:{ [blockName]: {order:[prodLabel...],
-// prod:{ [prodLabel]: {label,w,wo} } } } } aggregation structure (built by
-// flashBuildSummaryINDO_) into the { blocks, grand } shape flashWriteSummaryTab_
-// expects: blocks = [{ name, rows:[{label,w,wo}], subW, subWO }], grand = {w,wo}
-// summed across every row in every block. (Previously called but never
-// defined — this was causing INDO flash generation to throw
-// "flashBlocksFromAgg_ is not defined".)
-function flashBlocksFromAgg_(merged) {
-  const blocks = [];
-  const grand  = { w: flashZero_(), wo: flashZero_() };
-
-  merged.order.forEach(function(blockName) {
-    const agg = merged.blocks[blockName];
-    if (!agg || !agg.order.length) return;
-
-    const rows  = [];
-    const subW  = flashZero_();
-    const subWO = flashZero_();
-
-    agg.order.forEach(function(prodLabel) {
-      const p = agg.prod[prodLabel];
-      rows.push(p);
-      flashAcc_(subW,  p.w.np,  p.w.rev,  p.w.gm,  p.w.nops);
-      flashAcc_(subWO, p.wo.np, p.wo.rev, p.wo.gm, p.wo.nops);
-    });
-
-    flashAcc_(grand.w,  subW.np,  subW.rev,  subW.gm,  subW.nops);
-    flashAcc_(grand.wo, subWO.np, subWO.rev, subWO.gm, subWO.nops);
-
-    blocks.push({ name: blockName, rows: rows, subW: subW, subWO: subWO });
-  });
-
-  return { blocks: blocks, grand: grand };
-}
 
 // ── INDO Summary ─────────────────────────────────────────────
-//  Builds Summary (IDR) + Summary USD by resolving metric columns from the
-//  header row of each detail tab — exactly the same approach as PH.
-//  No manual column index configuration needed.
+//  Writes Summary (IDR) and Summary (USD) directly with live formulas —
+//  matching the reference finalized file exactly. Same 12-column, 3-block
+//  layout as PH. Each channel gets TWO rows: a product row (with the live
+//  SUMIFS) followed by a channel-label row that simply references the
+//  product row directly above it (=B{productRow} etc.).
 //
-//  Telesales / Agency / Dealer tabs (Indo_Raw columns written by flashConsolidateINDO_):
-//    Channel      : tab name is used directly (each tab = one channel)
-//    Product      : 'Product Name'
-//    Net Premium  : 'Gross Written Premium'  (IDR)
-//    Revenue      : 'Net Revenue'
-//    Gross Profit : 'Gross Profit'
-//    Policy Status: 'Policy Status'  (W/O filter: excludes 'cancelled' and 'rejected')
+//  Telesales / Agency (source: Indo_Raw columns written by flashConsolidateINDO_):
+//    G=Business Channel, AC=Gross Written Premium, AH=[MIS] Gross Revenue,
+//    AO=Gross Profit, AQ=Policy Status
+//    Filter: Policy Status <> "Cancelled" AND <> "Rejected"
 //
-//  B2B(SAU) tabs (24-col output written by flashConsolidateSAU_):
-//    Product      : 'Business Class'
-//    Net Premium  : 'GWP (USD)'              (already in USD — no FX divide needed)
-//    Revenue      : 'Revenue (USD)'
-//    Gross Profit : 'Gross Profit (USD)'
-//    No status col in SAU output → all SAU rows always count as W/O (non-cancelled)
+//  Dealer: no source tab (INDO has no Dealer detail data) — both rows are 0.
 //
-//  W/O cancellations = Policy Status (lowercased) not in FLASH_INDO_EXCLUDE_STATUSES
+//  B2B (SAU): single combined row summing the TOTAL row of both
+//  'B2B(SAU)-New Business' and 'B2B(SAU)-Renewal' tabs (col V=GWP(USD),
+//  W=Revenue(USD), X=Gross Profit(USD), U=unit count). The TOTAL row is
+//  always the tab's last row (detected via getLastRow()), so this works
+//  regardless of how many data rows exist that month.
+//  IDR values = (NB_total + Renewal_total) × FX (SAU source is already USD).
+//  USD values = (NB_total + Renewal_total)      (no ×FX).
+//
+//  Summary (USD) is NOT a mirror of Summary (IDR) — it is written with its
+//  own independent formulas (÷FX baked into the Telesales/Agency SUMIFS, and
+//  no ×FX on the B2B SAU row), matching the reference file. It also has NO
+//  "Local currency" note row (goes straight from title to the blank/header rows).
 function flashBuildSummaryINDO_(ss, cfg, w) {
+  flashWriteSummaryINDOFormulas_(ss, 'Summary (IDR)', w, cfg.fx, true);
+  flashWriteSummaryINDOFormulas_(ss, 'Summary (USD)', w, cfg.fx, false);
+  return { note: 'INDO Summary (IDR) + Summary (USD) built with live formulas.' };
+}
 
-  // Helper: resolve a named column to its 0-based index in a header array.
-  // Returns -1 if not found (mirrors String.indexOf behaviour).
-  function colIdx(headers, name) {
-    const n = name.trim().toLowerCase();
-    for (var i = 0; i < headers.length; i++) {
-      if (String(headers[i]).trim().toLowerCase() === n) return i;
+function flashWriteSummaryINDOFormulas_(ss, tabName, w, fx, isIDR) {
+  let sh = ss.getSheetByName(tabName);
+  if (!sh) sh = ss.insertSheet(tabName);
+  else     sh.clearContents();
+
+  const WIDTH = 12;
+  const divSuffix = isIDR ? '' : ('/' + fx);   // Telesales/Agency SUMIFS divisor suffix
+
+  // Build the 4 formulas (B, C, D, L) for a Telesales/Agency product row.
+  function chFormulas(tab, chVal) {
+    function sumifs(col) {
+      return 'SUMIFS(' + tab + '!' + col + ':' + col + ', ' + tab + '!G:G,"' + chVal + '",' +
+        tab + '!AQ:AQ,"<>Cancelled",' + tab + '!AQ:AQ,"<>Rejected")' + divSuffix;
     }
-    return -1;
+    return {
+      B: '=' + sumifs('AC'),
+      C: '=' + sumifs('AH'),
+      D: '=COUNTIFS(' + tab + '!AC:AC,"<>", ' + tab + '!G:G,"' + chVal + '",' +
+         tab + '!AQ:AQ,"<>CANCELLED",' + tab + '!AQ:AQ,"<>REJECTED")',
+      L: '=' + sumifs('AO')
+    };
   }
 
-  const merged = { order:[], blocks:{} };
-
-  // ── Telesales / Agency / Dealer ──────────────────────────────────────────
-  // Each tab is a single flat table (one header row, data rows below).
-  // Channel = the tab name itself.
-  ['Telesales','Agency','Dealer'].forEach(function(tab) {
-    const sh = ss.getSheetByName(tab);
-    if (!sh) return;
-    const values = sh.getDataRange().getValues();
-    if (values.length < 2) return;
-
-    const hdr = values[0];
-    const iPr  = colIdx(hdr, 'Product Name');
-    const iNP  = colIdx(hdr, 'Gross Written Premium');
-    const iRev = colIdx(hdr, 'Net Revenue');
-    const iGM  = colIdx(hdr, 'Gross Profit');
-    const iSt  = colIdx(hdr, 'Policy Status');
-
-    // Warn in log if key columns not found — won't throw, just produces zeros
-    if (iNP < 0 || iRev < 0 || iGM < 0) {
-      Logger.log('INDO Summary: missing metric column(s) in tab "' + tab + '" — check headers');
-    }
-
-    const blk = { order:[], prod:{} };
-    values.slice(1).forEach(function(row) {
-      const pr   = (iPr  >= 0 ? String(row[iPr]  || '').trim() : '') || 'Comprehensive';
-      const np   = iNP  >= 0 ? flashCellNum_(row[iNP])  : 0;
-      const rev  = iRev >= 0 ? flashCellNum_(row[iRev]) : 0;
-      const gm   = iGM  >= 0 ? flashCellNum_(row[iGM])  : 0;
-      const st   = iSt  >= 0 ? String(row[iSt] || '').trim().toLowerCase() : '';
-      const inWO = (iSt >= 0) ? !FLASH_INDO_EXCLUDE_STATUSES[st] : true;
-
-      if (!blk.prod[pr]) { blk.prod[pr] = { label:pr, w:flashZero_(), wo:flashZero_() }; blk.order.push(pr); }
-      flashAcc_(blk.prod[pr].w, np, rev, gm, 1);
-      if (inWO) flashAcc_(blk.prod[pr].wo, np, rev, gm, 1);
-    });
-
-    if (blk.order.length) {
-      merged.blocks[tab] = blk;
-      merged.order.push(tab);
-    }
-  });
-
-  // ── B2B (SAU) — New Business + Renewal ───────────────────────────────────
-  // SAU tabs use a 24-col output schema written by flashConsolidateSAU_.
-  // Metric values are already in USD (GWP/Revenue/Gross Profit columns).
-  // For the IDR Summary we multiply back by FX; the USD Summary divides by FX
-  // again, which nets to 1 — effectively keeping USD values in the IDR tab too.
-  // This matches how SAU has always been reported: in USD, not IDR.
-  const sauBlk = { order:[], prod:{} };
-  [['B2B(SAU)-New Business','New Business'], ['B2B(SAU)-Renewal','Renewal']].forEach(function(pair) {
-    const sh = ss.getSheetByName(pair[0]);
-    if (!sh) return;
-    const values = sh.getDataRange().getValues();
-    if (values.length < 2) return;
-
-    const hdr  = values[0];
-    const iPr  = colIdx(hdr, 'Business Class');
-    const iNP  = colIdx(hdr, 'GWP (USD)');
-    const iRev = colIdx(hdr, 'Revenue (USD)');
-    const iGM  = colIdx(hdr, 'Gross Profit (USD)');
-
-    if (iNP < 0 || iRev < 0 || iGM < 0) {
-      Logger.log('INDO Summary: missing metric column(s) in SAU tab "' + pair[0] + '" — check headers');
-    }
-
-    const pr = pair[1]; // 'New Business' or 'Renewal'
-    if (!sauBlk.prod[pr]) { sauBlk.prod[pr] = { label:pr, w:flashZero_(), wo:flashZero_() }; sauBlk.order.push(pr); }
-
-    values.slice(1).forEach(function(row) {
-      // SAU values are in USD — multiply by FX to get IDR-equivalent for the IDR Summary.
-      // The USD Summary will then divide by FX, returning the original USD value.
-      const np  = (iNP  >= 0 ? flashCellNum_(row[iNP])  : 0) * cfg.fx;
-      const rev = (iRev >= 0 ? flashCellNum_(row[iRev]) : 0) * cfg.fx;
-      const gm  = (iGM  >= 0 ? flashCellNum_(row[iGM])  : 0) * cfg.fx;
-      flashAcc_(sauBlk.prod[pr].w,  np, rev, gm, 1);
-      flashAcc_(sauBlk.prod[pr].wo, np, rev, gm, 1); // SAU has no cancellation status
-    });
-  });
-  if (sauBlk.order.length) {
-    merged.blocks['B2B (SAU)'] = sauBlk;
-    merged.order.push('B2B (SAU)');
+  // Detect the SAU TOTAL row (always the last row of each SAU tab).
+  function sauTotalRow(tabName2) {
+    const sh2 = ss.getSheetByName(tabName2);
+    return sh2 ? sh2.getLastRow() : null;
   }
+  const nbRow  = sauTotalRow('B2B(SAU)-New Business');
+  const renRow = sauTotalRow('B2B(SAU)-Renewal');
 
-  const bg = flashBlocksFromAgg_(merged);
-  flashWriteSummaryTab_(ss, 'Summary (IDR)', bg.blocks, bg.grand, 1,      'IDR', w, 'local currency');
-  flashWriteSummaryTab_(ss, 'Summary USD',   bg.blocks, bg.grand, cfg.fx, 'USD', w, 'IDR ÷ ' + cfg.fx);
-  return { blocks: bg.blocks.length, note: 'INDO Summary (IDR) + Summary USD built from headers.' };
+  const out = [];
+
+  // ── Header rows ──────────────────────────────────────────────────────────
+  const r1 = Array(WIDTH).fill('');
+  r1[0] = 'INS Summary (' + (isIDR ? ('Local IDR') : 'USD') + ') \u2014 ' + w.monName + '-' + w.yy + ' ' + w.fy;
+  out.push(r1);
+
+  if (isIDR) {
+    const r2 = Array(WIDTH).fill('');
+    r2[2] = 'Local currency: ' + fx;
+    out.push(r2);
+  } else {
+    out.push(Array(WIDTH).fill(''));  // row 2 blank for USD (no currency note)
+  }
+  out.push(Array(WIDTH).fill(''));    // row 3 blank (both IDR and USD)
+
+  const r4 = Array(WIDTH).fill('');
+  r4[0]='Channel / Product'; r4[1]='Net Premium'; r4[2]='Revenue'; r4[3]='Units';
+  r4[6]='Channel / Product'; r4[7]='COGS';
+  r4[10]='Channel / Product'; r4[11]='Gross Margin';
+  out.push(r4);
+
+  // ── Telesales ────────────────────────────────────────────────────────────
+  let sr = out.length + 1;
+  const telF = chFormulas('Telesales', 'Telesales');
+  let row = Array(WIDTH).fill('');
+  row[0]='Comprehensive'; row[6]='Comprehensive'; row[10]='Comprehensive';
+  row[1]=telF.B; row[2]=telF.C; row[3]=telF.D; row[7]='=C'+sr+'-L'+sr; row[11]=telF.L;
+  out.push(row);
+  const telProdRow = sr;
+
+  sr = out.length + 1;
+  row = Array(WIDTH).fill('');
+  row[0]='Telesales'; row[6]='Telesales'; row[10]='Telesales';
+  row[1]='=B'+telProdRow; row[2]='=C'+telProdRow; row[3]='=D'+telProdRow;
+  row[7]='=H'+telProdRow; row[11]='=L'+telProdRow;
+  out.push(row);
+  const telChRow = sr;
+
+  // ── Agency ───────────────────────────────────────────────────────────────
+  sr = out.length + 1;
+  const agyF = chFormulas('Agency', 'Agency');
+  row = Array(WIDTH).fill('');
+  row[0]='Comprehensive'; row[6]='Comprehensive'; row[10]='Comprehensive';
+  row[1]=agyF.B; row[2]=agyF.C; row[3]=agyF.D; row[7]='=C'+sr+'-L'+sr; row[11]=agyF.L;
+  out.push(row);
+  const agyProdRow = sr;
+
+  sr = out.length + 1;
+  row = Array(WIDTH).fill('');
+  row[0]='Agency'; row[6]='Agency'; row[10]='Agency';
+  row[1]='=B'+agyProdRow; row[2]='=C'+agyProdRow; row[3]='=D'+agyProdRow;
+  row[7]='=H'+agyProdRow; row[11]='=L'+agyProdRow;
+  out.push(row);
+  const agyChRow = sr;
+
+  // ── Dealer — no source data, always 0 ───────────────────────────────────
+  sr = out.length + 1;
+  row = Array(WIDTH).fill('');
+  row[0]='Comprehensive'; row[6]='Comprehensive'; row[10]='Comprehensive';
+  row[1]=0; row[2]=0; row[3]=0; row[7]=0; row[11]=0;
+  out.push(row);
+  const dealerProdRow = sr;
+
+  sr = out.length + 1;
+  row = Array(WIDTH).fill('');
+  row[0]='Dealer'; row[6]='Dealer'; row[10]='Dealer';
+  row[1]=0; row[2]='=C'+dealerProdRow; row[3]='=D'+dealerProdRow;
+  row[7]='=H'+dealerProdRow; row[11]='=L'+dealerProdRow;
+  out.push(row);
+  const dealerChRow = sr;
+
+  // ── B2B (SAU) — combined New Business + Renewal ─────────────────────────
+  sr = out.length + 1;
+  row = Array(WIDTH).fill('');
+  row[0]='B2B (SAU)'; row[6]='B2B (SAU)'; row[10]='B2B (SAU)';
+  if (nbRow && renRow) {
+    const mult = isIDR ? ('*' + fx) : '';
+    row[1] = "=('B2B(SAU)-New Business'!V" + nbRow + "+'B2B(SAU)-Renewal'!V" + renRow + ')' + mult;
+    row[2] = "=('B2B(SAU)-New Business'!W" + nbRow + "+'B2B(SAU)-Renewal'!W" + renRow + ')' + mult;
+    row[3] = "='B2B(SAU)-Renewal'!U" + renRow + "+'B2B(SAU)-New Business'!U" + nbRow;
+    row[11] = "=('B2B(SAU)-New Business'!X" + nbRow + "+'B2B(SAU)-Renewal'!X" + renRow + ')' + mult;
+  } else {
+    row[1] = 0; row[2] = 0; row[3] = 0; row[11] = 0;
+  }
+  row[7] = '=C' + sr + '-L' + sr;
+  out.push(row);
+  const sauRow = sr;
+
+  // ── TOTAL ────────────────────────────────────────────────────────────────
+  sr = out.length + 1;
+  row = Array(WIDTH).fill('');
+  row[0]='TOTAL'; row[6]='TOTAL'; row[10]='TOTAL';
+  const memberRows = [telChRow, agyChRow, dealerChRow, sauRow];
+  function totRef(c) { return 'sum(' + memberRows.map(function(r){ return c + r; }).join(',') + ')'; }
+  row[1] = '=' + totRef('B'); row[2] = '=' + totRef('C'); row[3] = '=' + totRef('D');
+  row[7] = '=' + totRef('H'); row[11] = '=' + totRef('L');
+  out.push(row);
+
+  sh.getRange(1, 1, out.length, WIDTH).setValues(out);
 }

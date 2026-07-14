@@ -81,10 +81,10 @@ table.mis td.row-label{text-align:left;font-size:10.5px;color:#444;white-space:n
 .col-hdr-label{background:#1F3864;color:#fff;text-align:left !important;padding-left:8px}
 /* PH column colours */
 .col-act    {background:#E2EFDA;color:#1e4620;font-weight:700}
-.col-pt     {background:#D5F0EA;color:#1a4a3a;font-weight:600}
+.col-pt     {background:#E2EFDA;color:#1a4a3a;font-weight:600}
 .col-aop    {background:#F2F2F2;color:#555;font-style:italic}
 .col-qtd    {background:#DDEEFF;color:#0d2b52;font-weight:700}
-.col-qtd-pt {background:#CCE8E0;color:#1a4a3a;font-weight:600}
+.col-qtd-pt {background:#DDEEFF;color:#1a4a3a;font-weight:600}
 .col-qtd-aop{background:#F2F2F2;color:#555;font-style:italic}
 .col-prev   {background:#EEF3FB;color:#1a3a6e}
 .col-prevmon{background:#FFF4E0;color:#7a4a00}
@@ -190,14 +190,14 @@ table.mis td.row-label{text-align:left;font-size:10.5px;color:#444;white-space:n
 
   <label for="startDate">From:</label>
   <input type="date" id="startDate" class="date-input"
-         value="2026-05-01" min="2026-04-01" max="2027-03-31"
+         value="2026-05-01" min="2025-04-01" max="2030-03-31"
          onchange="onDateChange()">
 
   <span class="date-sep">&#8594;</span>
 
   <label for="endDate">To:</label>
   <input type="date" id="endDate" class="date-input"
-         value="2026-05-31" min="2026-04-01" max="2027-03-31"
+         value="2026-05-31" min="2025-04-01" max="2030-03-31"
          onchange="onDateChange()">
 
   <button class="btn btn-refresh" onclick="loadAll()">&#8635; Refresh</button>
@@ -1824,8 +1824,34 @@ function doUnfreeze() {
   loadCountry(activeTab, s, e, true);
 }
 
-function doEncode() {
-  showToast('Encode will be wired in Phase 6', 'err');
+async function doEncode() {
+  var country = activeTab, s = activeStart, e = activeEnd;
+  if (getState(country, s, e) !== 'FROZEN') {
+    showToast('Freeze the period first, then encode it', 'err');
+    return;
+  }
+  var snap = dataCache[country + ':' + s + ':' + e] || loadSnap(country, s, e);
+  if (!snap || !snap.rangeActuals || !snap.rangeActuals.channels) {
+    showToast('No frozen data to encode', 'err');
+    return;
+  }
+  var month = isoToMonthStr(s); // reporting month, e.g. 'Jun-26'
+  var channels = snap.rangeActuals.channels; // ← the frozen numbers, not a fresh pull
+
+  var res = await runScript('encodeToActuals', country, month, channels, false);
+  if (res && res.blocked) {
+    var msg = month + ' already has data for: ' + res.conflicts.map(function(c){return c.channel;}).join(', ') +
+              '. Overwrite anyway?';
+    if (!confirm(msg)) { showToast('Encode cancelled', 'info'); return; }
+    res = await runScript('encodeToActuals', country, month, channels, true);
+  }
+  if (!res || !res.success) {
+    showToast('Encode failed: ' + (res && res.error || 'unknown error'), 'err');
+    return;
+  }
+  setState(country, s, e, 'ENCODED');
+  updateControlBar();
+  showToast(country + ' ' + month + ' encoded to Insurance Actuals \u2713', 'ok');
 }
 
 // ── CREATE FLASH ─────────────────────────────────────────────
